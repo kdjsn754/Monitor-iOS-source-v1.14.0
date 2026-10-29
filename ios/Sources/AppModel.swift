@@ -353,14 +353,15 @@ final class AppModel: ObservableObject {
     //
     // 路由器 CPU 往往只有几百 MHz，一次查询里 fork 出来的进程越少越好。
     // 这里把监控拆成四档，各档独立计时，互不牵连：
-    //   快档   CPU / 内存 / 网口流量 / 负载 / WAN 口  —— 一条命令、一个 awk 进程
-    //   慢档   闪存 / 温度 / 风扇 / DHCP 租约 / 端口    —— 十几秒一次
+    //   快档   CPU / 内存 / 网口流量 / 负载 / WAN 口 / 温度 / 风扇
+    //          —— 一个 awk 进程读 /proc，sysfs 用内建 read 读，全程零额外进程
+    //   慢档   闪存 / DHCP 租约 / 端口                 —— 十几秒一次
     //   状态档 OpenClash 是否安装、是否运行、配置项      —— 二十秒左右一次
     //   指标档 OpenClash REST 的 /traffic 与 /connections
     //          （/connections 会让 clash 序列化整张连接表，最贵，单独放慢）
     // 全部脚本都以 nice -n 19 执行，监控永远不会和转发 / 防火墙抢 CPU。
 
-    private var fastInterval: TimeInterval { lowPower ? 5 : 3 }
+    private var fastInterval: TimeInterval { lowPower ? 4 : 2 }
     private var slowInterval: TimeInterval { lowPower ? 20 : 10 }
     private var stateInterval: TimeInterval { lowPower ? 45 : 20 }
     private var trafficInterval: TimeInterval { lowPower ? 12 : 6 }
@@ -451,6 +452,7 @@ final class AppModel: ObservableObject {
         let sections = parseSections(try await execute(fastCommand))
         updateCPU(sections["STAT"] ?? "")
         updateMemory(sections["MEMINFO"] ?? "")
+        updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         let wan = parseWanDevice(sections["ROUTE"] ?? "")
         if !wan.isEmpty, wan != stats.wanDevice {
             stats.wanDevice = wan
@@ -475,7 +477,6 @@ final class AppModel: ObservableObject {
     private func pollSlow() async throws {
         let sections = parseSections(try await execute(slowCommand))
         updateFlash(sections["FLASH"] ?? "")
-        updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         updateDevices(sections["LEASES"] ?? "")
         updatePorts(ports: sections["PORTS"] ?? "", brif: sections["BRIF"] ?? "")
     }
@@ -1078,21 +1079,13 @@ private extension AppModel {
         """)
     }
 
-    /// 快档：CPU、内存、网口流量、运行时间、负载、默认路由。
-    /// 全部 /proc 文件交给**一个** awk 读完并按文件名打段标记——
+    /// 快档：CPU、内存、网口流量、运行时间、负载、默认路由，以及温度、风扇。
+    /// /proc 那几个文件全部交给**一个** awk 读完并按文件名打段标记——
     /// 老版本这里是 5 个 cat，端口那一块更是每个网口起 8 个进程。
+    /// 温度 / 风扇是单值 sysfs，用 shell 内建 read 读，不额外 fork 进程。
     var fastCommand: String {
         lowPriority("""
         LC_ALL=C awk 'FNR==1{n=split(FILENAME,p,"/"); print "@@" toupper(p[n])} {print}' /proc/stat /proc/meminfo /proc/net/dev /proc/uptime /proc/loadavg /proc/net/route 2>/dev/null
-        """)
-    }
-
-    /// 慢档：闪存、温度、风扇、租约、LAN 端口。
-    /// 单值 sysfs 一律用 shell 内建 read 读，不再为每个文件 fork 一个 cat。
-    var slowCommand: String {
-        lowPriority("""
-        echo @@FLASH
-        df -k /rom /overlay / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "SYS",$3; else if($NF=="/overlay")print "TOTAL",$2,"APP",$3,"AVAIL",$4; else if($NF=="/")print "ROOT",$2,$3,$4}'
         echo @@TEMP
         for f in /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input; do
           if [ -r "$f" ]; then read -r v < "$f"; echo "T $v"; fi
@@ -1101,6 +1094,16 @@ private extension AppModel {
         for f in /sys/class/hwmon/hwmon*/fan*_input; do
           if [ -r "$f" ]; then read -r v < "$f"; echo "F $v"; fi
         done
+        true
+        """)
+    }
+
+    /// 慢档：闪存、DHCP 租约、LAN 端口。
+    /// 单值 sysfs 一律用 shell 内建 read 读，不再为每个文件 fork 一个 cat。
+    var slowCommand: String {
+        lowPriority("""
+        echo @@FLASH
+        df -k /rom /overlay / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "SYS",$3; else if($NF=="/overlay")print "TOTAL",$2,"APP",$3,"AVAIL",$4; else if($NF=="/")print "ROOT",$2,$3,$4}'
         echo @@LEASES
         cat /tmp/dhcp.leases 2>/dev/null
         echo @@BRIF

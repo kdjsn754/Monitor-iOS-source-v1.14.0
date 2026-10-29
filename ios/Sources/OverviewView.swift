@@ -200,26 +200,62 @@ struct OverviewView: View {
 
     private var flashContent: some View {
         let info = model.flashInfo
-        return VStack(spacing: 14) {
-            FlashBarRow(
-                label: "系统占用",
-                used: info.systemUsed,
-                fraction: info.systemFraction,
-                color: Color(.systemGray)
-            )
-            FlashBarRow(
-                label: "应用程序占用",
-                used: info.appUsed,
-                fraction: info.appFraction,
-                color: .blue
-            )
-            FlashBarRow(
-                label: "可用",
-                used: info.available,
-                fraction: info.availableFraction,
-                color: Color(.systemGray3)
-            )
+        return Group {
+            if info.hasData {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(formatFlashBytes(info.usedBytes))
+                            .font(.title3.weight(.semibold))
+                            .monospacedDigit()
+                        Text("已用 / 共 \(formatFlashBytes(info.total))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 6)
+                        Text("\(Int((info.usedFraction * 100).rounded()))%")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(flashAccent(info.usedFraction))
+                            .monospacedDigit()
+                    }
+                    FlashCompositionBar(info: info)
+                    VStack(spacing: 7) {
+                        FlashLegendRow(
+                            label: "系统占用",
+                            bytes: info.systemUsed,
+                            fraction: info.systemFraction,
+                            color: Color(.systemGray)
+                        )
+                        FlashLegendRow(
+                            label: "应用程序",
+                            bytes: info.appUsed,
+                            fraction: info.appFraction,
+                            color: .blue
+                        )
+                        FlashLegendRow(
+                            label: "可用空间",
+                            bytes: info.available,
+                            fraction: info.availableFraction,
+                            color: Color(.systemGray3)
+                        )
+                    }
+                }
+            } else {
+                Text("正在读取闪存信息…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            }
         }
+    }
+
+    /// 剩余空间少于 10% 转橙、少于 3% 转红，其余用蓝色。
+    private func flashAccent(_ used: Double) -> Color {
+        if used >= 0.97 { return .red }
+        if used >= 0.90 { return .orange }
+        return .blue
     }
 
     private var hardwareContent: some View {
@@ -403,9 +439,39 @@ struct InfoRow: View {
     }
 }
 
-private struct FlashBarRow: View {
+/// 一条横向"容量条"，按系统 / 应用 / 可用三段拼接，一眼看出空间构成。
+private struct FlashCompositionBar: View {
+    let info: FlashInfo
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color(.systemGray6))
+                HStack(spacing: 0) {
+                    segment(width: width * CGFloat(info.systemFraction), color: Color(.systemGray))
+                    segment(width: width * CGFloat(info.appFraction), color: .blue)
+                    segment(width: width * CGFloat(info.availableFraction), color: Color(.systemGray3))
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 13)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("已用 \(Int((info.usedFraction * 100).rounded()))%")
+    }
+
+    private func segment(width: CGFloat, color: Color) -> some View {
+        Rectangle()
+            .fill(color)
+            .frame(width: max(0, width))
+    }
+}
+
+private struct FlashLegendRow: View {
     let label: String
-    let used: UInt64
+    let bytes: UInt64
     let fraction: Double
     let color: Color
 
@@ -414,50 +480,24 @@ private struct FlashBarRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 8, height: 8)
-                Text(label)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Spacer(minLength: 6)
-                Text("\(percent)%")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(color)
-                    .monospacedDigit()
-                Text("(\(formatFlashBytes(used)))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            LinearGauge(fraction: fraction, color: color)
+        HStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.subheadline)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text("\(percent)%")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(width: 36, alignment: .trailing)
+            Text(formatFlashBytes(bytes))
+                .font(.subheadline)
+                .monospacedDigit()
+                .frame(width: 72, alignment: .trailing)
         }
-    }
-}
-
-private struct LinearGauge: View {
-    let fraction: Double
-    let color: Color
-
-    private var value: CGFloat {
-        CGFloat(max(0, min(1, fraction)))
-    }
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color(.systemGray6))
-
-                Capsule()
-                    .fill(color)
-                    .frame(width: geometry.size.width * value)
-                    .shadow(color: color.opacity(0.22), radius: 4)
-            }
-        }
-        .frame(height: 12)
     }
 }
 

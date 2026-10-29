@@ -98,7 +98,7 @@ struct SettingsView: View {
 
                     LabeledContent("快档 / 慢档", value: model.pollSummary)
 
-                    Text("轮询已按最省 CPU 的方式重排：CPU、内存、网口速率走短周期，闪存、租约、端口和 OpenClash 接口拆到长周期，所有脚本都以最低优先级执行。低功耗模式会再拉长一档，适合性能较弱的路由器。")
+                    Text("轮询已按最省 CPU 的方式重排：CPU、内存、网口速率、温度风扇走短周期，闪存、租约、端口和 OpenClash 接口拆到长周期，所有脚本都以最低优先级执行。低功耗模式会再拉长一档，适合性能较弱的路由器。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -113,7 +113,7 @@ struct SettingsView: View {
                 }
 
                 Section("关于") {
-                    LabeledContent("版本", value: "1.14.0")
+                    LabeledContent("版本", value: "1.14.1")
                     LabeledContent("连接方式", value: "SSH 直连")
                     LabeledContent("OpenClash", value: model.openClash.installed ? "已安装" : "未检测到")
                 }

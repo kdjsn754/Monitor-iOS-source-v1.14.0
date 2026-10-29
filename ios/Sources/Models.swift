@@ -198,6 +198,19 @@ struct FlashInfo {
     var availableFraction: Double {
         max(0, 1 - systemFraction - appFraction)
     }
+
+    /// 已用字节数：总容量减可用容量，兜底用系统 + 应用之和。
+    var usedBytes: UInt64 {
+        guard total > 0 else { return 0 }
+        let sum = systemUsed &+ appUsed
+        let derived = total > available ? total - available : 0
+        return min(total, max(derived, sum))
+    }
+
+    /// 已用占比，用于总览数字和颜色档位。
+    var usedFraction: Double {
+        total > 0 ? min(1, Double(usedBytes) / Double(total)) : 0
+    }
 }
 
 struct HistoryPoint: Identifiable {
