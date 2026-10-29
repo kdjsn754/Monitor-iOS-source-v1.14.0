@@ -2,6 +2,44 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.23.0 — 黑边找到真正原因、代理配置改自绘面板、概览页瘦身
+
+- **黑边：26 SDK 也不够，要 27**。系统给 App 的窗口是**按打包用的 SDK 版本**分档的，
+  跟设备型号无关：iOS 26 及更早 SDK → 「默认兼容」，整个界面被放进一个旧尺寸窗口居中显示，
+  四周留黑边；iOS 27 SDK → 「过渡适配」，窗口能铺到屏幕边缘；iOS 27.1 SDK → 完全适配。
+  实测这台 27 系统上的截图是 1206×2622，但界面按 393×852 排版后放大了 402/393 = 1.0229 倍，
+  上下各剩 4px 黑边——正好是「默认兼容」这一档，说明上一次还是 26 SDK 打的包。
+  对策（都在构建侧，App 内改不了窗口大小）：
+  - workflow 新增「选择机器上最新的 Xcode」：遍历 `/Applications/Xcode*.app` 取版本号最高的
+    一版再 `xcode-select`，因为镜像里常装好几版而默认指向最旧的；
+  - SDK 检查从「≥ 26」改成「≥ 26 才出货、≥ 27 才铺满」，低于 27 会打警告并写进构建摘要；
+  - 打包后核对产物 `DTSDKName` 与 `UILaunchScreen`，缺 launch screen 会直接失败
+    （那也是黑边的另一个经典来源）；
+  - `Info.plist` / `project.yml` 删掉已在 iOS 26 废弃的 `UIRequiresFullScreen`。
+- **关于只留两行**：版本、连接方式。屏幕尺寸 / 运行模式 / 构建 SDK 那几行是上一版排查黑边
+  时加的诊断信息，已从界面和代码里一起去掉（`ScreenInfo.swift` 整个文件删除）。
+- **代理配置重新设计**：原来是一行标题配一个系统 `Menu` 胶囊，弹出来是系统灰底浮层，
+  跟这套圆角卡片完全两个风格。现在是
+  - 配置条：文档图标 + 「当前配置文件」+ 文件名（中间截断）+ 「共 N 个」+「更换」；
+  - 点开是自绘的半屏选择器（`ConfigPickerSheet`）：每行一枚单选点、使用中的那条带绿色
+    「使用中」标签，底部主按钮「应用「xxx」」，确认后才重启内核；
+  - 空目录时直接说明「把 .yaml 放进 /etc/openclash/config」。
+- **访问检查去掉走势线**：四个小格各挂一条 22pt 的 Swift Charts 折线，轴全隐藏看不出趋势，
+  还是整页最贵的一次重绘。换成 3pt 延迟条（≤150ms 绿 / ≤400ms 蓝 / 更慢橙 / 超时红满格），
+  四格高度也一致了。
+- **概览页 CPU 不再飙**（三个真原因，一起修）：
+  1. 切页的「立刻取一次」和轮询循环的第一拍是**紧挨着**跑的，两轮之间只隔几十毫秒；
+     CPU 占用率是两次 `/proc/stat` 做差再除以时间，短窗口里随便一点中断就算出 80%~100%。
+     现在先取一次、睡满一个间隔再进循环；连接后的首次填充同样计入，绝不会一个间隔里采两次；
+  2. `updateCPU` / `updateNetwork` 增加了窗口下限（0.8s / 0.5s）：太短的一拍直接丢掉且不动基线，
+     下一拍仍按完整间隔算；
+  3. 速度曲线从 Swift Charts 换成一条 Canvas 折线（`SpeedSparkline`），圆环去掉了 `shadow`。
+     整个工程不再依赖 Charts。
+- **代码精简**：删掉 `ScreenInfo.swift`、`splitSections`、`parseCPUModel`/`parseCPUCores`
+  （核数改成在路由器上 `awk` 数完只回一个数字）、`AccessCheck.history`、
+  `FlashInfo` 的三个兼容别名、`RouterInfo.cpuModel/load`、
+  `HistoryPoint` 的 cpu/memory 字段、`AccessCheck.Site.domain`；设备行标识改用 IP。
+
 ## v1.22.0 — 已保存连接重做、报错会自己走、黑边加了现场诊断
 
 - **已保存连接整块重写**（`SettingsView.connectionsCard / connectionRow`）：
@@ -267,7 +305,7 @@ Android 版的 iOS 原生 SwiftUI 移植。
   - DHCP 租约设备及详情
   - 仅 LAN 端口 / LAN 桥接
   - 系统信息（主机名、型号、架构、固件、内核、运行时间、负载）
-  - 速度曲线和 CPU/内存趋势
+  - 速度曲线（Canvas 折线，不依赖 Swift Charts）
 - 概览模块：
   - 显示/隐藏
   - 拖动排序
@@ -277,9 +315,9 @@ Android 版的 iOS 原生 SwiftUI 移植。
   - 规则 / 全局 / 直连
   - 启动 / 关闭 / 重启（已运行时只提示，不重复发命令）
   - 运行数据：上传、下行、总量、连接数、内存、CPU、负载
-  - 配置文件选择 + 独立“切换配置”按钮
+  - 配置文件选择（自绘半屏选择器）+ 应用后重启内核
   - 控制面板：App 内 WKWebView 打开
-  - 访问检查：百度、网易云音乐、GitHub、YouTube，带延迟、状态、趋势
+  - 访问检查：百度、网易云音乐、GitHub、YouTube，带状态点、延迟和延迟条
 - 设置：
   - 跟随系统 / 浅色 / 深色
   - 概览模块管理
@@ -296,9 +334,9 @@ IPA 需要 macOS + Xcode + Apple 签名。当前仓库提供 GitHub Actions 的�
 
 1. 仓库里要有 `ios/` 和 `.github/workflows/ios-unsigned.yml`，**workflow 文件必须在默认分支上**，
    否则 Actions 页面里根本看不到这个 workflow（或跑的还是旧文件）。
-2. Actions → **Build unsigned iOS IPA** → Run workflow，运行器保持默认 **auto**。
-3. 下载 artifact `OpenWrtMonitor-unsigned-ipa-macos-15` 或 `...-macos-26`
-   （auto 模式下两个池子谁先起来谁先出包，产物内容一样）。
+2. Actions → **Build unsigned iOS IPA** → Run workflow，运行器保持默认 **auto**（= `macos-26`）。
+3. 下载 artifact `OpenWrtMonitor-unsigned-ipa-macos-26`。构建摘要里会写清本次用的 Xcode、
+   产物的 `DTSDKName`；如果 SDK 低于 27，摘要里会有一条「上下仍会留黑边」的警告。
 4. 用 Sideloadly / AltStore 配合自己的 Apple ID 签名安装。
 
 #### 一直停在「Waiting for a runner to pick up this job」
@@ -355,7 +393,7 @@ chmod +x build-unsigned-ipa.sh
 ## 依赖
 
 - iOS 17+
-- Xcode 15+
+- Xcode 27+（打包 SDK ≥ 27 才能在新机型上铺满屏幕；26 也能编，但系统会加黑边）
 - [libssh2-apple](https://github.com/mfcollins3/libssh2-apple)：libssh2 1.10+，兼容 OpenWrt Dropbear
 - XcodeGen
 

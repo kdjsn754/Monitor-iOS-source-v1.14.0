@@ -77,11 +77,16 @@ final class AppModel: ObservableObject {
     private var activePassword: String?
     private var lastSuccessfulPoll: Date?
     private var lastReconnectAttempt: Date?
+    /// CPU / 网速都是「两次读数做差再除以时间」算出来的，所以必须记住上一拍的时间。
+    /// 缺了这个时间戳，两轮挨得太近时除的是一个几十毫秒的窗口，占用率会蹦到 100%。
     private var lastCpuTotal: Double?
     private var lastCpuIdle: Double?
+    private var lastCpuDate: Date?
     private var lastRx: Double?
     private var lastTx: Double?
     private var lastNetDate: Date?
+    /// 上一轮采集的开始时间：切页时用它挡掉「紧接着又来一轮」的重复采集。
+    private var lastTickAt: Date?
     private var lastOcPid = ""
     private var lastOcTicks: Double?
     private var lastOcTotal: Double?
@@ -428,9 +433,11 @@ final class AppModel: ObservableObject {
     private func resetSamplingBaselines() {
         lastCpuTotal = nil
         lastCpuIdle = nil
+        lastCpuDate = nil
         lastRx = nil
         lastTx = nil
         lastNetDate = nil
+        lastTickAt = nil
         lastOcPid = ""
         lastOcTicks = nil
         lastOcTotal = nil
@@ -556,19 +563,32 @@ final class AppModel: ObservableObject {
     }
 
     /// 轮询循环：固定间隔，跑的永远是当前页面的那一组数据。
+    ///
+    /// 切页后的「立刻取一次」曾经和循环的第一拍紧挨着跑——两轮之间只隔了几十毫秒，
+    /// 而 CPU / 网速都是拿两次读数做差算的，短窗口算出来的就是噪声，于是每点一次
+    /// 概览，CPU 就蹦到 100%。现在先取一次、睡满一个间隔，再进循环。
     private func startPolling(refreshNow: Bool = false) {
         pollTask?.cancel()
         pollTask = nil
         guard !periodicItems.isEmpty else { return }
+        // 上一轮刚跑完（比如切页切得很快）就不再插队，直接进循环。
+        let justPolled = lastTickAt.map { Date().timeIntervalSince($0) < 0.8 } ?? false
+        let immediate = refreshNow && !justPolled
         pollTask = Task { [weak self] in
             guard let self else { return }
-            if refreshNow {
-                // 切页后的第一轮把这一页的项全取一次（包括只在进页面时取的那几项）
+            if immediate {
                 await self.pollTick(includeOnce: true)
                 if Task.isCancelled { return }
             }
             while !Task.isCancelled {
                 let interval = self.pollSeconds
+                // 刚采过（切页那一拍、或者连接后的首次填充）就把这一拍等满，
+                // 绝不在一个间隔里连着采两次。
+                if let last = self.lastTickAt {
+                    let wait = interval - Date().timeIntervalSince(last)
+                    if wait > 0.2 { try? await Task.sleep(for: .seconds(wait)) }
+                }
+                if Task.isCancelled { return }
                 let started = Date()
                 await self.pollTick()
                 if Task.isCancelled { return }
@@ -590,6 +610,7 @@ final class AppModel: ObservableObject {
     private func bootstrapRefresh() async {
         do {
             try await runItems(activeItems)
+            lastTickAt = Date()
             lastSuccessfulPoll = Date()
         } catch {
             status = "连接中断"
@@ -604,6 +625,7 @@ final class AppModel: ObservableObject {
         guard connected else { return }
         let items = includeOnce ? activeItems : periodicItems
         guard !items.isEmpty else { return }
+        lastTickAt = Date()
         do {
             try await runItems(items)
             lastSuccessfulPoll = Date()
@@ -778,8 +800,8 @@ final class AppModel: ObservableObject {
             value.hostname = firstLine(sections["HOST"])
             value.kernel = firstLine(sections["KERNEL"])
             value.architecture = firstLine(sections["ARCH"])
-            value.cpuModel = parseCPUModel(sections["CPUINFO"] ?? "")
-            value.cpuCores = parseCPUCores(sections["CPUINFO"] ?? "")
+            // 核数在路由器上数好再传上来，省得把 /proc/cpuinfo 整段搬过来再逐行扫。
+            value.cpuCores = Int(firstLine(sections["CPUCORES"])) ?? 0
             value.firmware = parseRelease(sections["RELEASE"] ?? "")
             routerInfo = value
             let wan = parseWanDevice(sections["ROUTE"] ?? "")
@@ -892,16 +914,12 @@ final class AppModel: ObservableObject {
                 return
             }
             accessChecks = AccessCheck.Site.allCases.map { site in
-                let previous = accessChecks.first { $0.site == site }
-                guard let result = results[site] else { return previous ?? AccessCheck(site: site) }
+                guard let result = results[site] else {
+                    return AccessCheck(site: site)
+                }
                 var check = AccessCheck(site: site, tested: true)
                 check.success = result.0
                 check.latency = result.1
-                if result.0 {
-                    check.history = Array(((previous?.history ?? []) + [result.1]).suffix(10))
-                } else {
-                    check.history = previous?.history ?? []
-                }
                 return check
             }
             if !silent { clearError() }
@@ -965,13 +983,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// CPU 占用率 = 两次 /proc/stat 的增量比。
+    ///
+    /// 关键在于**窗口长度**：切页、手动刷新、重连都会插进来一轮采集，两次读数
+    /// 可能只隔几十毫秒。那个窗口里随便一点中断就能算出 80%~100%，于是「点一下
+    /// 概览，CPU 就飙到 100%」——数字是量出来的噪声，不是路由器真的忙。
+    /// 这里要求窗口至少 0.8 秒，太短的这一拍直接丢掉且不动基线，
+    /// 下一拍仍然按一个完整间隔来算，读数就稳定了。
     private func updateCPU(_ text: String) {
         guard let line = text.split(separator: "\n").first(where: { $0.hasPrefix("cpu ") }) else { return }
         let values = line.split(separator: " ").dropFirst().compactMap { Double($0) }
         guard values.count >= 4 else { return }
         let total = values.prefix(8).reduce(0, +)
         let idle = values[3] + (values.count > 4 ? values[4] : 0)
-        if let lastTotal = lastCpuTotal, let lastIdle = lastCpuIdle {
+        let now = Date()
+        if let lastTotal = lastCpuTotal, let lastIdle = lastCpuIdle, let lastDate = lastCpuDate {
+            let elapsed = now.timeIntervalSince(lastDate)
+            guard elapsed >= 0.8 else { return }
             let deltaTotal = total - lastTotal
             let deltaIdle = idle - lastIdle
             if deltaTotal > 0 {
@@ -980,6 +1008,7 @@ final class AppModel: ObservableObject {
         }
         lastCpuTotal = total
         lastCpuIdle = idle
+        lastCpuDate = now
     }
 
     private func updateMemory(_ text: String) {
@@ -1065,12 +1094,12 @@ final class AppModel: ObservableObject {
             let now = Date()
             if let lastRx, let lastTx, let lastNetDate {
                 let elapsed = now.timeIntervalSince(lastNetDate)
-                if elapsed > 0 {
-                    stats.download = max(0, (rx - lastRx) / elapsed)
-                    stats.upload = max(0, (tx - lastTx) / elapsed)
-                    stats.sessionDownload += max(0, rx - lastRx)
-                    stats.sessionUpload += max(0, tx - lastTx)
-                }
+                // 和 CPU 同理：窗口太短算出来的速度是抖动，直接跳过这一拍。
+                guard elapsed >= 0.5 else { return }
+                stats.download = max(0, (rx - lastRx) / elapsed)
+                stats.upload = max(0, (tx - lastTx) / elapsed)
+                stats.sessionDownload += max(0, rx - lastRx)
+                stats.sessionUpload += max(0, tx - lastTx)
             }
             lastRx = rx
             lastTx = tx
@@ -1165,30 +1194,6 @@ final class AppModel: ObservableObject {
         return ""
     }
 
-    private func parseCPUModel(_ text: String) -> String {
-        var fallback = ""
-        for line in text.split(separator: "\n") {
-            let lower = line.lowercased()
-            let value = (line.split(separator: ":", maxSplits: 1).last.map(String.init) ?? "")
-                .trimmingCharacters(in: .whitespaces)
-            if lower.contains("model name") || lower.contains("cpu model") {
-                if !value.isEmpty { return value }
-            }
-            if lower.hasPrefix("processor") && fallback.isEmpty {
-                fallback = value
-            }
-        }
-        return fallback
-    }
-
-    private func parseCPUCores(_ text: String) -> Int {
-        let count = text
-            .split(separator: "\n")
-            .filter { $0.lowercased().hasPrefix("processor") }
-            .count
-        return count
-    }
-
     private func parseRelease(_ text: String) -> String {
         for line in text.split(separator: "\n") {
             if line.contains("DISTRIB_DESCRIPTION") || line.contains("PRETTY_NAME") {
@@ -1203,8 +1208,6 @@ final class AppModel: ObservableObject {
     private func appendHistory() {
         history.append(HistoryPoint(
             date: Date(),
-            cpu: stats.cpu,
-            memory: memoryFraction * 100,
             download: stats.download,
             upload: stats.upload
         ))
@@ -1213,10 +1216,6 @@ final class AppModel: ObservableObject {
 
     var memoryFraction: Double {
         stats.memoryTotal > 0 ? Double(stats.memoryUsed) / Double(stats.memoryTotal) : 0
-    }
-
-    private func splitSections(_ raw: String) -> [String: String] {
-        parseSections(raw)
     }
 
     private func parseSections(_ raw: String) -> [String: String] {
@@ -1369,7 +1368,7 @@ private extension AppModel {
         echo @@RELEASE; cat /etc/openwrt_release 2>/dev/null
         echo @@KERNEL; uname -r 2>/dev/null
         echo @@ARCH; uname -m 2>/dev/null
-        echo @@CPUINFO; head -n 60 /proc/cpuinfo 2>/dev/null
+        echo @@CPUCORES; awk '/^processor/{n++} END{print n+0}' /proc/cpuinfo 2>/dev/null
         echo @@UPTIME; cat /proc/uptime 2>/dev/null
         echo @@LOAD; cat /proc/loadavg 2>/dev/null
         echo @@ROUTE; cat /proc/net/route 2>/dev/null

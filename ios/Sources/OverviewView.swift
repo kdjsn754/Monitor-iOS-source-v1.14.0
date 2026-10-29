@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
@@ -100,24 +99,7 @@ struct OverviewView: View {
                 Divider().frame(height: 34)
                 speedValue("上传", value: formatSpeed(model.stats.upload), color: .purple, icon: "arrow.up")
             }
-            if model.history.count > 1 {
-                Chart(model.history) { point in
-                    LineMark(
-                        x: .value("时间", point.date),
-                        y: .value("下载", point.download),
-                        series: .value("方向", "下载")
-                    )
-                    .foregroundStyle(.blue)
-                    LineMark(
-                        x: .value("时间", point.date),
-                        y: .value("上传", point.upload),
-                        series: .value("方向", "上传")
-                    )
-                    .foregroundStyle(.purple)
-                }
-                .chartXAxis(.hidden)
-                .frame(height: 76)
-            }
+            SpeedSparkline(points: model.history)
             HStack {
                 Text("本次会话 ↓ \(formatBytes(model.stats.sessionDownload))")
                 Spacer()
@@ -294,7 +276,8 @@ struct OverviewView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            ForEach(model.devices.prefix(4)) { device in
+            // 用 IP 当标识：DeviceInfo 每轮都重建，UUID 每次都变，会让这几行每 2 秒整体换新。
+            ForEach(Array(model.devices.prefix(4).enumerated()), id: \.element.ip) { _, device in
                 HStack {
                     Text(device.name)
                         .font(.caption)
@@ -454,6 +437,63 @@ private struct FlashLegendRow: View {
     }
 }
 
+/// 速度曲线。
+///
+/// 以前用 Swift Charts：每 2 秒数据一变，整套图表场景图（坐标轴、标度、图例、
+/// 动画事务）都要重建一次，是概览页最贵的一块，也是「点一下概览就发热」的主因。
+/// 换成一个 Canvas 路径之后只画两条折线 + 一块渐变，成本跟点数线性相关。
+private struct SpeedSparkline: View {
+    let points: [HistoryPoint]
+
+    var body: some View {
+        Canvas { context, size in
+            guard size.width > 1, size.height > 1 else { return }
+            guard points.count > 1 else {
+                // 刚连上还没攒够两个点：画一条淡基线，卡片高度不会跳。
+                var baseline = Path()
+                baseline.move(to: CGPoint(x: 0, y: size.height - 1))
+                baseline.addLine(to: CGPoint(x: size.width, y: size.height - 1))
+                context.stroke(baseline, with: .color(Color(.separator).opacity(0.5)),
+                               style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                return
+            }
+
+            // 两条线共用一个峰值，上下行的高低关系才看得出来。
+            let peak = max(points.map { max($0.download, $0.upload) }.max() ?? 0, 1)
+            let stepX = size.width / CGFloat(points.count - 1)
+            let height = size.height - 2
+
+            func path(_ value: (HistoryPoint) -> Double) -> Path {
+                var path = Path()
+                for (index, point) in points.enumerated() {
+                    let ratio = max(0, min(1, value(point) / peak))
+                    let point2D = CGPoint(x: CGFloat(index) * stepX,
+                                          y: size.height - 1 - CGFloat(ratio) * height)
+                    if index == 0 { path.move(to: point2D) } else { path.addLine(to: point2D) }
+                }
+                return path
+            }
+
+            let downloadPath = path { $0.download }
+            var area = downloadPath
+            area.addLine(to: CGPoint(x: size.width, y: size.height))
+            area.addLine(to: CGPoint(x: 0, y: size.height))
+            area.closeSubpath()
+            context.fill(area, with: .linearGradient(
+                Gradient(colors: [Color.blue.opacity(0.20), Color.blue.opacity(0)]),
+                startPoint: .zero,
+                endPoint: CGPoint(x: 0, y: size.height)
+            ))
+
+            let line = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+            context.stroke(downloadPath, with: .color(.blue), style: line)
+            context.stroke(path { $0.upload }, with: .color(.purple), style: line)
+        }
+        .frame(height: 76)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct ResourceRingCard: View {
     let title: String
     let icon: String
@@ -512,7 +552,6 @@ private struct RingGauge: View {
                     style: StrokeStyle(lineWidth: 12, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .shadow(color: accent.opacity(0.25), radius: 4)
 
             VStack(spacing: 1) {
                 Text(String(format: "%.0f%%", value))

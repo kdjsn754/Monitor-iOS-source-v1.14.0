@@ -26,8 +26,11 @@ targets:
           - _ssh._tcp
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # 全屏的前提：有 UILaunchScreen（哪怕是空字典）系统才认为这是「现代 App」，
+        # 否则会按旧版小屏 App 处理，四周强制加黑边。
         UILaunchScreen: {}
-        UIRequiresFullScreen: true
+        # UIRequiresFullScreen 在 iOS 26 已废弃（iPad 多任务相关），对 iPhone 无意义，
+        # 留着只会让系统按「老 App」对待，删掉更安全。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
@@ -35,8 +38,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.catmint.openwrtmonitor
-        MARKETING_VERSION: 1.22.0
-        CURRENT_PROJECT_VERSION: 35
+        MARKETING_VERSION: 1.23.0
+        CURRENT_PROJECT_VERSION: 36
         SWIFT_VERSION: 5.9
         IPHONEOS_DEPLOYMENT_TARGET: 17.0
         CODE_SIGN_STYLE: Manual

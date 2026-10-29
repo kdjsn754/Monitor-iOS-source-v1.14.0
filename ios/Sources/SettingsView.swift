@@ -13,7 +13,6 @@ struct SettingsView: View {
     /// 等待确认删除的连接。
     @State private var pendingDelete: RouterProfile?
     @State private var confirmDelete = false
-    @State private var screen = ScreenInfo.Snapshot()
 
     var body: some View {
         NavigationStack {
@@ -54,7 +53,6 @@ struct SettingsView: View {
                 }
                 Button("取消", role: .cancel) {}
             }
-            .onAppear { screen = ScreenInfo.current }
         }
     }
 
@@ -478,46 +476,17 @@ struct SettingsView: View {
 
     // MARK: - 关于
 
+    /// 只留两行：版本 + 连接方式。
+    /// 屏幕尺寸、运行模式、构建 SDK 那几行是排查黑边时临时加的诊断信息，
+    /// 黑边已经定为打包 SDK 的问题，界面上不再占地方。
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
-            VStack(spacing: 9) {
-                infoRow("版本", "1.22.0")
+            VStack(spacing: 10) {
+                infoRow("版本", "1.23.0")
+                Divider().opacity(0.5)
                 infoRow("连接方式", "SSH 直连")
-                infoRow("屏幕", screen.sizeText)
-                infoRow("运行模式", screen.modeText,
-                        color: screen.isLetterboxed ? .orange : .secondary)
-                infoRow("构建 SDK", ScreenInfo.sdkName,
-                        color: sdkIsOld ? .orange : .secondary)
-                infoRow("采集范围", "只采当前页面要用的数据")
-                infoRow("数据去向", "只在本机与路由器之间")
-
-                if screen.isLetterboxed {
-                    // 这条不是布局问题：系统不认识这块屏，就把界面整体放大到物理像素上，
-                    // 上下自然留出黑边。App 内改不了窗口大小，只能换新 SDK 重打包。
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("系统把界面按 \(Int(screen.size.width.rounded()))×\(Int(screen.size.height.rounded())) 排版后放大，"
-                             + "所以上下有黑边。请用 Xcode 16 及以上（iOS 18+ SDK）重新打包，"
-                             + "界面上无法绕过。")
-                            .font(.caption2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
             }
         }
-    }
-
-    /// 构建 SDK 低于 ios 26 就说明工具链太老，正是黑边的来源。
-    private var sdkIsOld: Bool {
-        let name = ScreenInfo.sdkName            // 形如 iphoneos26.0
-        let rest = name.contains("iphoneos")
-            ? String(name.dropFirst("iphoneos".count))
-            : name
-        let major = rest.split(separator: ".").first.flatMap { Int($0) } ?? 0
-        return major > 0 && major < 26
     }
 
     private func infoRow(_ title: String, _ value: String,

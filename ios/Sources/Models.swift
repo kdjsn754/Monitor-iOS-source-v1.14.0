@@ -90,9 +90,7 @@ struct RouterInfo {
     var architecture = ""
     var firmware = ""
     var kernel = ""
-    var cpuModel = ""
     var cpuCores = 0
-    var load = ""
 }
 
 struct OpenClashInfo {
@@ -138,15 +136,6 @@ struct AccessCheck: Identifiable {
             case .youtube: return "YouTube"
             }
         }
-
-        var domain: String {
-            switch self {
-            case .baidu: return "www.baidu.com"
-            case .netease: return "music.163.com"
-            case .github: return "github.com"
-            case .youtube: return "www.youtube.com"
-            }
-        }
     }
 
     /// 用站点做标识，不用新建 UUID：每次检测都会重建数组，
@@ -156,7 +145,6 @@ struct AccessCheck: Identifiable {
     var success = false
     var latency: Int = 0
     var tested = false
-    var history: [Int] = []
 }
 
 struct FlashInfo {
@@ -191,18 +179,14 @@ struct FlashInfo {
     var appShare: Double { min(1 - systemShare, share(appUsed)) }
 
     var availableShare: Double { max(0, 1 - systemShare - appShare) }
-
-    /// 兼容旧调用点。
-    var systemFraction: Double { systemShare }
-    var appFraction: Double { appShare }
-    var availableFraction: Double { availableShare }
 }
 
+/// 速度曲线上的一个点。只保留画图要用的两个值，
+/// 以前还顺带存了 cpu / memory，但没有任何视图读它——每 2 秒多存两份 Double，
+/// 只为了让整个数组多一次拷贝。
 struct HistoryPoint: Identifiable {
     let id = UUID()
     let date: Date
-    let cpu: Double
-    let memory: Double
     let download: Double
     let upload: Double
 }

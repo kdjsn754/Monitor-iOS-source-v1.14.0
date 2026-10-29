@@ -19,19 +19,28 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
-# 在 Xcode 26 以下的工具链里，iOS SDK 不认识 iPhone 17 这一代屏幕尺寸，
-# 系统会把 App 按兼容模式运行：内容缩在中间，上下各一条黑边。
+# 打包用的 iOS SDK 决定了 App 在新机型上是铺满还是缩在兼容窗口里：
+#   SDK ≤ 26  → 默认兼容档：界面被放进一个旧尺寸窗口居中显示，上下留黑边；
+#   SDK 27    → 过渡适配：能铺到屏幕边缘；
+#   SDK 27.1+ → 完全适配：真正铺满。
+# 低于 26 直接停；26 到 27 之间只警告（能出包，但黑边可能还在）。
 SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo 0)"
 SDK_MAJOR="${SDK_VERSION%%.*}"
-echo "==> iphoneos SDK: $SDK_VERSION"
+echo "==> iphoneos SDK: $SDK_VERSION（$(xcodebuild -version | head -n 1)）"
 if [ "${SDK_MAJOR:-0}" -lt 26 ]; then
   cat <<EOS
 当前 Xcode 的 iOS SDK 是 $SDK_VERSION，低于 26。
-用它打出来的包在 iPhone 17 / iOS 27 上会被系统按兼容模式运行（上下有黑边）。
+用它打出来的包在新机型上会被系统按兼容模式运行（上下有黑边）。
 请换用 Xcode 26 及以上版本（sudo xcode-select -s /Applications/Xcode.app），或改用
 GitHub Actions 里的 macos-26 产物。
 EOS
   exit 1
+fi
+if [ "${SDK_MAJOR:-0}" -lt 27 ]; then
+  cat <<EOS
+注意：SDK 是 $SDK_VERSION，低于 27。系统会按「默认兼容」档运行，界面缩在旧尺寸窗口里，
+上下仍会留一条黑边。想彻底铺满，请在装有 Xcode 27（iOS 27 SDK）的机器上重新打包。
+EOS
 fi
 
 xcodegen generate
@@ -62,7 +71,15 @@ fi
 
 # 打完之后再核一遍产物里记录的 SDK，避免「检查过了但打出来还是旧包」。
 BUILT_SDK="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$APP/Info.plist" 2>/dev/null || echo 未知)"
-echo "==> 产物记录的 SDK: $BUILT_SDK（App 里「设置 → 关于 → 构建 SDK」显示的也是它）"
+echo "==> 产物记录的 SDK: $BUILT_SDK"
+
+# 缺 UILaunchScreen 的包会被系统当成旧版小屏 App，四周强制加黑边。
+if /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$APP/Info.plist" >/dev/null 2>&1; then
+  echo "==> UILaunchScreen: 有（全屏显示的前提）"
+else
+  echo "！！产物 Info.plist 里没有 UILaunchScreen，系统会加黑边，请检查 Sources/Info.plist" >&2
+  exit 1
+fi
 
 rm -rf build/Payload
 mkdir -p build/Payload

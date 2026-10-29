@@ -1,11 +1,10 @@
 import SwiftUI
-import Charts
 
 /// 网络代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 流量 → 内核 → 配置 → 检查」重排。
 struct ProxyView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selectedConfig = ""
     @State private var showPanel = false
+    @State private var showConfigPicker = false
     @State private var isChecking = false
 
     private var oc: OpenClashInfo { model.openClash }
@@ -24,10 +23,6 @@ struct ProxyView: View {
         if !oc.installed { return "未检测到 OpenClash" }
         if !oc.running { return "服务已停止，启动后可查看流量" }
         return "面板端口 \(oc.panelPort)"
-    }
-
-    private var canSwitchConfig: Bool {
-        !selectedConfig.isEmpty && selectedConfig != oc.config
     }
 
     var body: some View {
@@ -56,19 +51,22 @@ struct ProxyView: View {
             .refreshable {
                 await model.manualRefresh()
             }
-            .onAppear { syncSelectedConfig() }
-            .onChange(of: oc.config) { _, _ in syncSelectedConfig() }
             .sheet(isPresented: $showPanel) {
                 if let url = oc.panelURL {
                     PanelView(url: url)
                 }
             }
-        }
-    }
-
-    private func syncSelectedConfig() {
-        if selectedConfig.isEmpty || !oc.configs.contains(selectedConfig) {
-            selectedConfig = oc.config
+            .sheet(isPresented: $showConfigPicker) {
+                ConfigPickerSheet(
+                    configs: oc.configs,
+                    applied: oc.config
+                ) { name in
+                    Task {
+                        await model.switchConfig(name)
+                        await model.refreshOpenClash()
+                    }
+                }
+            }
         }
     }
 
@@ -291,42 +289,53 @@ struct ProxyView: View {
 
     // MARK: - 配置
 
+    /// 以前这一块是「一行标题 + 一个系统的 Menu 胶囊」。Menu 弹的是系统浮层：
+    /// 灰底、系统字体、跟界面的圆角卡片完全不是一套，列表长了还得滚动整个系统面板。
+    /// 现在改成一张可点的配置条 + 自绘的半屏选择器，全部用同一套卡片/胶囊样式。
     private var configCard: some View {
         SectionCard("代理配置", icon: "doc.text") {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("当前配置")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(oc.config.isEmpty ? "未选择" : oc.config)
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+            VStack(spacing: 10) {
+                Button {
+                    guard !oc.configs.isEmpty, !model.busy else { return }
+                    showConfigPicker = true
+                } label: {
+                    HStack(spacing: 11) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.blue.opacity(0.12))
+                                .frame(width: 38, height: 38)
+                            Image(systemName: "doc.text.fill")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(.blue)
+                        }
 
-                    Spacer(minLength: 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("当前配置文件")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text(configTitle)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(.primary)
+                            Text(configDetail)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
 
-                    if oc.configs.isEmpty {
-                        Text("未找到配置")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Menu {
-                            ForEach(oc.configs, id: \.self) { name in
-                                Button {
-                                    selectedConfig = name
-                                } label: {
-                                    Label(name, systemImage: name == oc.config
-                                          ? "checkmark.circle.fill" : "circle")
-                                }
-                            }
-                        } label: {
+                        Spacer(minLength: 4)
+
+                        if oc.configs.isEmpty {
+                            Text("未找到")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        } else {
                             HStack(spacing: 4) {
-                                Text("选择")
+                                Text("更换")
                                     .font(.caption.weight(.medium))
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 9, weight: .semibold))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
@@ -334,32 +343,33 @@ struct ProxyView: View {
                             .foregroundStyle(Color.blue)
                         }
                     }
+                    .padding(11)
+                    .background(Color(.tertiarySystemFill),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .buttonStyle(.plain)
+                .disabled(oc.configs.isEmpty || model.busy)
 
-                if !oc.configs.isEmpty {
-                    Button {
-                        Task {
-                            await model.switchConfig(selectedConfig)
-                            await model.refreshOpenClash()
-                        }
-                    } label: {
-                        Text(canSwitchConfig ? "切换到 \(selectedConfig)" : "已应用")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .background(
-                                Color.blue.opacity(canSwitchConfig ? 0.14 : 0.06),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(canSwitchConfig ? Color.blue : Color.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSwitchConfig || model.busy)
-                }
+                Text(oc.configs.isEmpty
+                     ? "把 .yaml 配置放进路由器的 /etc/openclash/config 目录，这里就会列出来。"
+                     : "切换会重启 OpenClash 内核，已建立的连接会短暂中断。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var configTitle: String {
+        guard !oc.config.isEmpty else { return "未选择" }
+        return (oc.config as NSString).lastPathComponent
+    }
+
+    private var configDetail: String {
+        guard !oc.configs.isEmpty else { return "没有可用配置" }
+        return "共 \(oc.configs.count) 个配置文件"
     }
 
     // MARK: - 控制面板
@@ -528,8 +538,13 @@ struct ProxyView: View {
         return formatter
     }()
 
+    /// 一个站点一格：名称 + 状态点 + 延迟 + 一条相对延迟条。
+    ///
+    /// 以前每格下面挂一条 22pt 的走势线（Swift Charts）。四个小图并排，
+    /// 既看不出趋势（一格才 10 个点、轴全隐藏），又是整页最贵的一次重绘。
+    /// 现在换成一条 3pt 的延迟条：一眼看出「快 / 慢 / 挂」，也顺带让四格高度一致。
     private func accessTile(_ check: AccessCheck) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Text(check.site.title)
                     .font(.caption2)
@@ -546,25 +561,28 @@ struct ProxyView: View {
                 .monospacedDigit()
                 .foregroundStyle(latencyColor(check))
 
-            if check.history.count > 1 {
-                Chart {
-                    ForEach(check.history.indices, id: \.self) { index in
-                        LineMark(
-                            x: .value("次数", index),
-                            y: .value("延迟", check.history[index])
-                        )
-                        .foregroundStyle(check.success ? Color.green : Color.red)
-                    }
-                }
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .frame(height: 22)
-            }
+            LatencyBar(fraction: latencyFraction(check), color: barColor(check))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.tertiarySystemFill),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// 延迟条的长度：500ms 打满。没测过是 0，超时直接满格标红。
+    private func latencyFraction(_ check: AccessCheck) -> Double {
+        guard check.tested else { return 0 }
+        guard check.success else { return 1 }
+        return min(1, max(0.04, Double(check.latency) / 500))
+    }
+
+    /// 150ms 内绿、400ms 内蓝、再慢转橙，超时红——比「一条走势线」直观得多。
+    private func barColor(_ check: AccessCheck) -> Color {
+        guard check.tested else { return Color(.systemGray3) }
+        guard check.success else { return .red }
+        if check.latency <= 150 { return .green }
+        if check.latency <= 400 { return .blue }
+        return .orange
     }
 
     private func latencyText(_ check: AccessCheck) -> String {
@@ -580,5 +598,200 @@ struct ProxyView: View {
     private func dotColor(_ check: AccessCheck) -> Color {
         guard check.tested else { return Color(.tertiaryLabel) }
         return check.success ? .green : .red
+    }
+}
+
+/// 3pt 的延迟条：轨道 + 填充，长度就是延迟占 500ms 的比例。
+private struct LatencyBar: View {
+    let fraction: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color(.systemGray5))
+                Capsule()
+                    .fill(color.opacity(0.9))
+                    .frame(width: max(0, min(1, fraction)) * proxy.size.width)
+            }
+        }
+        .frame(height: 3)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 配置文件选择器。
+///
+/// 之前点「选择」弹的是系统的 `Menu`：系统灰底浮层、系统字号、跟这套圆角卡片完全两个风格，
+/// 列表一长还会被折成一列系统菜单项。这里改成自绘的半屏面板——
+/// 每行一枚单选点、使用中的那条带绿色标签，底部一枚主按钮确认后才重启内核。
+private struct ConfigPickerSheet: View {
+    let configs: [String]
+    let applied: String
+    let onApply: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var picked: String
+
+    init(configs: [String], applied: String, onApply: @escaping (String) -> Void) {
+        self.configs = configs
+        self.applied = applied
+        self.onApply = onApply
+        let initial = configs.contains(applied) ? applied : (configs.first ?? "")
+        _picked = State(initialValue: initial)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(configs, id: \.self) { name in
+                        row(name)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+            footer
+        }
+        .background(Color(.systemGroupedBackground))
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("选择配置文件")
+                    .font(.headline)
+                Text("共 \(configs.count) 个，当前用 \(appliedName)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 6)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+    }
+
+    private func row(_ name: String) -> some View {
+        let selected = name == picked
+        let isApplied = name == applied
+        return Button {
+            picked = name
+        } label: {
+            HStack(spacing: 11) {
+                ZStack {
+                    Circle()
+                        .strokeBorder(selected ? Color.blue : Color(.systemGray3),
+                                      lineWidth: selected ? 6 : 1.5)
+                        .frame(width: 18, height: 18)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name)
+                        .font(.subheadline.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if isApplied {
+                        Text("使用中")
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.14), in: Capsule())
+                            .foregroundStyle(.green)
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                if selected, !isApplied {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.blue)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, isApplied ? 10 : 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                selected ? Color.blue.opacity(0.08) : Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(
+                        selected ? Color.blue.opacity(0.35) : Color(.separator).opacity(0.4),
+                        lineWidth: 0.8
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var footer: some View {
+        VStack(spacing: 8) {
+            Button {
+                guard !picked.isEmpty, picked != applied else {
+                    dismiss()
+                    return
+                }
+                onApply(picked)
+                dismiss()
+            } label: {
+                Text(actionTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(
+                        canApply ? Color.blue : Color(.systemGray4),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(canApply ? Color.white : Color(.systemGray))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(picked.isEmpty)
+
+            Text("切换后 OpenClash 会重启内核，正在走的连接会断一下。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 20)
+    }
+
+    private var appliedName: String {
+        applied.isEmpty ? "默认配置" : (applied as NSString).lastPathComponent
+    }
+
+    private var canApply: Bool {
+        !picked.isEmpty && picked != applied
+    }
+
+    private var actionTitle: String {
+        canApply ? "应用「\(picked)」" : "已在使用"
     }
 }
