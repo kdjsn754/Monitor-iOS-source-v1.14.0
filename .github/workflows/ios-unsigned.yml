@@ -1,0 +1,51 @@
+name: Build unsigned iOS IPA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate iOS project
+        run: |
+          if [ -f ios/project.yml ]; then
+            echo "IOS_DIR=ios" >> "$GITHUB_ENV"
+          elif [ -f project.yml ]; then
+            echo "IOS_DIR=." >> "$GITHUB_ENV"
+          else
+            echo "找不到 project.yml，请确认仓库结构" >&2
+            exit 1
+          fi
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: ${{ env.IOS_DIR }}
+        run: xcodegen generate
+      - name: Archive unsigned app
+        working-directory: ${{ env.IOS_DIR }}
+        run: |
+          xcodebuild archive \
+            -project OpenWrtMonitor.xcodeproj \
+            -scheme OpenWrtMonitor \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/OpenWrtMonitor.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+      - name: Package IPA
+        working-directory: ${{ env.IOS_DIR }}
+        run: |
+          mkdir -p build/Payload
+          cp -R build/OpenWrtMonitor.xcarchive/Products/Applications/OpenWrtMonitor.app build/Payload/
+          cd build
+          zip -r OpenWrtMonitor-unsigned.ipa Payload
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrtMonitor-unsigned-ipa
+          path: ${{ env.IOS_DIR }}/build/OpenWrtMonitor-unsigned.ipa
