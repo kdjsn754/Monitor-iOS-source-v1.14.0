@@ -19,7 +19,6 @@ struct PollSettingsView: View {
         .background(Color.clear)
         .navigationTitle("采集与刷新")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("恢复默认") {

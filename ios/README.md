@@ -2,6 +2,37 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.19.0 — 标题不再被压住、设备列表改弹窗、连接可以中途停
+
+- **导航栏背景恢复系统材质**：概览 / 网络代理 / 设置原本都是
+  `.toolbarBackground(.hidden, for: .navigationBar)`。栏全透明之后，滚动时内容会直接从
+  标题文字下面穿过去——设置页的「设置」被路由器名字压住，概览页的「概览」被卡片标题压住，
+  滑到底再点一次标签栏回顶时也会有一帧错位。改成 `.visible` 后内容从栏后面滚过是模糊的，
+  标题折叠成居中小字，不再叠加；二级页（采集与刷新 / 概览模块 / 连接设备）去掉该修饰，
+  统一走系统默认。
+- **连接设备改弹窗**：概览卡片里的「查看全部设备」由 `NavigationLink` 改为 `.sheet`，
+  中等/全高两档（`presentationDetents`），列出名称 + IP + MAC，顶部带总台数与
+  「仅 DHCP 租约」说明，右上角「完成」或下拉收起；概览的滚动位置和实时曲线不受影响。
+  行标识改用 IP（`DeviceInfo.id` 每轮采集都会新建，用 id 会导致每 2 秒整体重建）。
+- **连接可中止 + 可回退**（`SSHService.swift` / `AppModel.swift` 改动最大）：
+  - 阻塞式 `connect()` 在跨网段时不按 `SO_SNDTIMEO` 返回，要等内核 SYN 重试约 75 秒，
+    弹窗就一直「已等待 N 秒」。改为非阻塞 connect + `poll` 200ms 切片，8 秒超时并给出
+    「请确认手机和路由器在同一网段」。
+  - 新增 `SSHService.cancelAttempt()`：锁保护的取消标记 + `shutdown()` 正在握手的 fd，
+    卡在 `connect()` 或 `libssh2_session_handshake` 里也能立刻退出（取消标记在派发前清，
+    避免「点停止比队列排到还早」把标记抹掉；失败出口统一先摘 pendingFD 再 close，
+    防止 fd 号被复用后误伤别的 socket）。
+  - 弹窗 `connecting` 状态新增红色「停止连接」，次要操作保留「在后台继续」。
+  - `connect(profile:password:)` 不再一上来 `disconnect()`：新会话握手成功才顶替旧会话，
+    失败/超时/取消用 `attemptFallback`（上一台的 profileID、密码、是否已连接）原样回滚。
+    `attemptToken` 让取消后的旧任务收尾失效；`attemptTarget` 让弹窗标题和「重试」
+    认准这次尝试的目标（回滚后 `currentProfile` 已经变回上一台了）。
+  - `lastConnectFailed` 明确区分「失败」与「取消」，弹窗据此显示失败还是成功
+    （回滚后 `connected` 为真，只看它会把失败演成成功）。
+  - `reconnect()` / 轮询的状态刷新在 `connecting` 期间让路，避免和新建连接抢会话。
+  - 换会话时清空采样基线（`resetSamplingBaselines`）与上一台的数据，第一轮不会拿新旧做差。
+- 版本 1.19.0 / build 32。
+
 ## v1.18.0 — 代理页流量真正动起来、编辑连接不再变新建、闪存卡重画
 
 - **实时流量终于会变**：`/traffic` 是**流式**接口——内核每秒吐一行

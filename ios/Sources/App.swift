@@ -35,11 +35,12 @@ struct RootView: View {
             if let phase = popupPhase {
                 ConnectionPopupView(
                     phase: phase,
-                    routerTitle: model.currentProfile?.title ?? "路由器",
-                    routerSubtitle: model.currentProfile?.subtitle ?? "",
+                    routerTitle: popupTarget?.title ?? "路由器",
+                    routerSubtitle: popupTarget?.subtitle ?? "",
                     startedAt: connectStartedAt,
                     onDismiss: { dismissPopup() },
-                    onRetry: { retryConnect() }
+                    onRetry: { retryConnect() },
+                    onCancel: { cancelConnect() }
                 )
                 .zIndex(2)
             }
@@ -76,10 +77,12 @@ struct RootView: View {
                 connectStartedAt = Date()
                 popupPhase = .connecting
             } else if popupPhase?.isConnecting == true {
-                if model.connected {
-                    finishPopup()
-                } else if let message = model.errorMessage {
+                // 先看「这次是否失败」：失败后上一台连接可能已经被恢复（connected 为真），
+                // 那就不能按成功来演。
+                if model.lastConnectFailed, let message = model.errorMessage {
                     popupPhase = .failed(message)
+                } else if model.connected {
+                    finishPopup()
                 } else {
                     dismissPopup()
                 }
@@ -103,6 +106,12 @@ struct RootView: View {
         }
     }
 
+    /// 弹窗上要显示的「这次在连哪一台」。
+    /// 失败回滚之后 currentProfile 已经退回上一台，所以优先用这次尝试的目标。
+    private var popupTarget: RouterProfile? {
+        model.attemptTarget?.profile ?? model.currentProfile
+    }
+
     /// 连上了：先让弹窗停一下显示成功，再自己收起来。
     private func finishPopup() {
         popupPhase = .connected
@@ -119,17 +128,24 @@ struct RootView: View {
         connectStartedAt = nil
     }
 
+    /// 用户主动停止：先收弹窗再让 model 收尾，
+    /// 这样 connected 回落时不会被上面的 onChange 误判成「连接成功」。
+    private func cancelConnect() {
+        withAnimation { popupPhase = nil }
+        connectStartedAt = nil
+        model.cancelConnect()
+    }
+
     private func retryConnect() {
-        guard let profile = model.currentProfile,
-              let password = KeychainStore.loadPassword(
-                  account: KeychainStore.passwordAccount(for: profile)
-              ) else {
+        // 用这次尝试的目标重试。失败回滚后 currentProfile 已经变回上一台，
+        // 用它重试会莫名其妙去连另一台路由器。
+        guard let target = model.attemptTarget else {
             dismissPopup()
             return
         }
         connectStartedAt = Date()
         popupPhase = .connecting
-        Task { await model.connect(profile: profile, password: password) }
+        Task { await model.connect(profile: target.profile, password: target.password) }
     }
 
     private var colorScheme: ColorScheme? {

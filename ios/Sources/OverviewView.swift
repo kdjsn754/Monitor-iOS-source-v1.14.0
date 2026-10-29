@@ -3,6 +3,7 @@ import Charts
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showAllDevices = false
 
     var body: some View {
         NavigationStack {
@@ -17,7 +18,9 @@ struct OverviewView: View {
             }
             .background(Color.clear)
             .navigationTitle("概览")
-            .toolbarBackground(.hidden, for: .navigationBar)
+            // 导航栏背景必须是「默认」的：以前设成 .hidden，栏就成了全透明，
+            // 滚动时内容会直接从标题文字下面穿过去，看起来就是标题被字压住。
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -29,6 +32,9 @@ struct OverviewView: View {
             }
             .refreshable {
                 await model.manualRefresh()
+            }
+            .sheet(isPresented: $showAllDevices) {
+                DeviceListView()
             }
         }
     }
@@ -304,10 +310,20 @@ struct OverviewView: View {
                 }
             }
             if !model.devices.isEmpty {
-                NavigationLink("查看全部设备") {
-                    DeviceListView()
+                Button {
+                    showAllDevices = true
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("查看全部设备")
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .font(.caption)
+                .buttonStyle(.plain)
             }
         }
     }

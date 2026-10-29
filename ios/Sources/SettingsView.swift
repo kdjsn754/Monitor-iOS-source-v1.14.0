@@ -26,7 +26,8 @@ struct SettingsView: View {
             }
             .background(Color.clear)
             .navigationTitle("设置")
-            .toolbarBackground(.hidden, for: .navigationBar)
+            // 见 OverviewView：导航栏背景设成 .hidden 会让内容从标题下面穿过去。
+            .toolbarBackground(.visible, for: .navigationBar)
             .sheet(item: $editorRoute) { route in
                 ConnectionEditorView(profile: route.profile)
                     .id(route.id)
@@ -168,9 +169,10 @@ struct SettingsView: View {
     private var statusPill: some View {
         HStack(spacing: 5) {
             Circle()
-                .fill(model.connected ? Color.green : Color.orange)
+                // 正在连新连接时旧会话还在，别让胶囊显示「已连接」骗人。
+                .fill(model.connecting ? Color.blue : (model.connected ? Color.green : Color.orange))
                 .frame(width: 6, height: 6)
-            Text(model.connected ? "已连接" : model.status)
+            Text(model.connecting ? "正在连接…" : (model.connected ? "已连接" : model.status))
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -378,7 +380,7 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 9) {
-                infoRow("版本", "1.18.0")
+                infoRow("版本", "1.19.0")
                 infoRow("连接方式", "SSH 直连")
                 infoRow("采集范围", "只采当前页面要用的数据")
                 infoRow("数据去向", "只在本机与路由器之间")
@@ -541,7 +543,9 @@ private struct ConnectionEditorView: View {
                                     webPort: web
                                 )
                             }
-                            if model.connected { dismiss() }
+                            // 连上了就收起表单；失败则留在这里让用户改地址，
+                            // 上一台连接已经自动恢复，关掉也不会掉线。
+                            if model.connected && !model.lastConnectFailed { dismiss() }
                         }
                     } label: {
                         HStack {

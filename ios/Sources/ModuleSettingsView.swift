@@ -56,7 +56,6 @@ struct ModuleSettingsView: View {
         .background(Color.clear)
         .navigationTitle("概览模块")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("恢复默认") {

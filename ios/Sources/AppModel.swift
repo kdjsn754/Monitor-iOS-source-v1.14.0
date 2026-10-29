@@ -3,11 +3,13 @@ import SwiftUI
 
 enum AppError: LocalizedError {
     case notConnected
+    case cancelled
     case message(String)
 
     var errorDescription: String? {
         switch self {
         case .notConnected: return "SSH 尚未连接"
+        case .cancelled: return "已取消连接"
         case .message(let value): return value
         }
     }
@@ -49,7 +51,22 @@ final class AppModel: ObservableObject {
     /// 当前在看的标签页。采集只跟着它走：切到设置页就完全停下。
     @Published private(set) var activePage: AppPage = .overview
 
-    private let ssh = SSHService()
+    private var ssh = SSHService()
+    /// 正在尝试建立的新会话：成功之后才顶替掉 `ssh`，
+    /// 失败或用户中途停止时旧会话还活着，界面可以直接退回上一台路由器。
+    private var attemptService: SSHService?
+    /// 这次尝试开始时连着谁，用来失败/取消后回滚。
+    private var attemptFallback: (profileID: UUID?, password: String?, connected: Bool)?
+    /// 当前 SSH 会话实际连的是哪个连接（不是「选中」的那个），
+    /// 回滚时以它为准，避免把刚点到一半的新连接当成上一台。
+    private var sessionProfileID: UUID?
+    /// 尝试序号：取消后旧任务收尾时据此判断自己是否已经过期。
+    private var attemptToken = 0
+    /// 上一次连接尝试是否失败（不是取消），弹窗据此决定显示失败还是成功。
+    @Published private(set) var lastConnectFailed = false
+    /// 这次尝试的目标。失败回滚后 `currentProfile` 已经变回上一台了，
+    /// 弹窗的标题和「重试」得靠它，不能用 currentProfile。
+    @Published private(set) var attemptTarget: (profile: RouterProfile, password: String)?
     private var pollTask: Task<Void, Never>?
     private var activePassword: String?
     private var lastSuccessfulPoll: Date?
@@ -133,36 +150,121 @@ final class AppModel: ObservableObject {
                 account: KeychainStore.passwordAccount(for: profile)
             )
         }
+        // 保存就保存了：连不上的时候也留在列表里，用户改完再试，
+        // 「重试」也有个确定的目标可指。
         await connect(profile: profile, password: password)
     }
 
-    func connect(profile: RouterProfile, password: String) async {
-        await disconnect(keepPassword: true)
+    /// 发起一次连接。
+    ///
+    /// 旧版本一上来就 `disconnect()`，于是「新建连接」一旦失败或者卡住，
+    /// 原来那台路由器也没了、只能掉回登录页。现在旧会话会一直留到新会话
+    /// 握手成功的那一刻才关闭：失败、超时、用户中途停止，都能原样退回上一台。
+    /// - Returns: 新会话是否真的连上了。
+    @discardableResult
+    func connect(profile: RouterProfile, password: String) async -> Bool {
+        attemptToken += 1
+        let token = attemptToken
+        attemptFallback = (sessionProfileID, activePassword, connected)
+        attemptTarget = (profile, password)
+
         connecting = true
+        lastConnectFailed = false
         errorMessage = nil
         status = "正在连接…"
+
+        let attempt = SSHService()
+        attemptService = attempt
         do {
-            try await ssh.connect(
+            try await attempt.connect(
                 host: profile.host,
                 port: profile.port,
                 user: profile.user,
                 password: password
             )
-            currentProfileID = profile.id
-            connected = true
-            connecting = false
-            activePassword = password
-            lastSuccessfulPoll = Date()
-            lastReconnectAttempt = nil
-            status = "已连接"
-            await bootstrapRefresh()
-            startPolling()
         } catch {
-            connected = false
-            connecting = false
-            status = "连接失败"
-            errorMessage = describe(error)
+            finishAttempt(token: token, error: error)
+            return false
         }
+        // 期间用户点了停止（token 已作废），这个会话直接丢弃。
+        guard token == attemptToken else { return false }
+        attemptService = nil
+
+        // 握手成功，这之后才真正切换过去。
+        ssh.disconnect()
+        ssh = attempt
+        attemptFallback = nil
+        attemptTarget = nil
+        connecting = false
+        lastConnectFailed = false
+        errorMessage = nil
+        currentProfileID = profile.id
+        sessionProfileID = profile.id
+        connected = true
+        activePassword = password
+        lastSuccessfulPoll = Date()
+        lastReconnectAttempt = nil
+        status = "已连接"
+        resetSamplingBaselines()
+        stats = OverviewStats()
+        routerInfo = RouterInfo()
+        devices = []
+        flashInfo = FlashInfo()
+        ocMetrics = OpenClashMetrics()
+        history = []
+        await bootstrapRefresh()
+        startPolling()
+        return true
+    }
+
+    /// 用户点「停止连接」：立刻把状态收回去，别让界面一直等。
+    func cancelConnect() {
+        guard connecting else { return }
+        attemptToken += 1                 // 让这次尝试的收尾逻辑失效
+        attemptService?.cancelAttempt()   // 打断卡在 socket 上的连接
+        attemptService = nil
+        connecting = false
+        lastConnectFailed = false
+        errorMessage = nil
+        restoreFallback(cancelled: true)
+    }
+
+    private func finishAttempt(token: Int, error: Error) {
+        guard token == attemptToken else { return }
+        attemptService = nil
+        connecting = false
+        if case AppError.cancelled = error {
+            errorMessage = nil
+            lastConnectFailed = false
+            restoreFallback(cancelled: true)
+        } else {
+            errorMessage = describe(error)
+            lastConnectFailed = true
+            restoreFallback(cancelled: false)
+        }
+    }
+
+    /// 回到尝试前的状态。旧会话没被拆掉的话，`connected` 依然是 true，直接可用。
+    private func restoreFallback(cancelled: Bool) {
+        guard let fallback = attemptFallback else {
+            connected = false
+            status = cancelled ? "已取消连接" : "连接失败"
+            return
+        }
+        attemptFallback = nil
+        guard fallback.connected else {
+            // 本来就没连上（登录页/首次连接）：保持选中项不动，让用户接着改地址。
+            connected = false
+            status = cancelled ? "已取消连接" : "连接失败"
+            return
+        }
+        if let id = fallback.profileID { currentProfileID = id }
+        sessionProfileID = fallback.profileID
+        activePassword = fallback.password
+        connected = true
+        lastReconnectAttempt = nil
+        lastSuccessfulPoll = Date()
+        status = "已连接"
     }
 
     private func describe(_ error: Error) -> String {
@@ -245,14 +347,30 @@ final class AppModel: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         ssh.disconnect()
+        attemptService?.cancelAttempt()
+        attemptService = nil
+        attemptToken += 1
+        attemptFallback = nil
+        attemptTarget = nil
         connected = false
         reconnecting = false
         busy = false
         connecting = false
+        lastConnectFailed = false
         activePassword = nil
+        sessionProfileID = nil
         lastSuccessfulPoll = nil
         lastReconnectAttempt = nil
         status = "未连接"
+        resetSamplingBaselines()
+        if !keepPassword, let profile = currentProfile {
+            KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
+        }
+    }
+
+    /// 清掉所有「跟上一台路由器/上一秒」相关的增量基线。
+    /// 换会话时必须清零，否则第一轮的速度/CPU 会拿新旧两台做差，蹦出离谱的数字。
+    private func resetSamplingBaselines() {
         lastCpuTotal = nil
         lastCpuIdle = nil
         lastRx = nil
@@ -264,9 +382,6 @@ final class AppModel: ObservableObject {
         lastOcUploadTotal = nil
         lastOcDownloadTotal = nil
         lastOcTotalDate = nil
-        if !keepPassword, let profile = currentProfile {
-            KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
-        }
     }
 
     func resumeAfterForeground() async {
@@ -290,7 +405,9 @@ final class AppModel: ObservableObject {
     }
 
     func reconnect(force: Bool) async {
-        guard !reconnecting, let profile = currentProfile else { return }
+        // 正在「新建/切换连接」时别插一脚：那会儿 currentProfile 可能已经指向新连接，
+        // 抢着重连会把旧会话搅乱。
+        guard !reconnecting, !connecting, let profile = currentProfile else { return }
         if !force, let lastReconnectAttempt,
            Date().timeIntervalSince(lastReconnectAttempt) < 5 {
             return
@@ -311,6 +428,7 @@ final class AppModel: ObservableObject {
                 password: password
             )
             activePassword = password
+            sessionProfileID = profile.id
             connected = true
             await bootstrapRefresh()
             startPolling()
@@ -432,8 +550,10 @@ final class AppModel: ObservableObject {
         do {
             try await runItems(items)
             lastSuccessfulPoll = Date()
-            if status != "已连接" { status = "已连接" }
+            if !connecting, status != "已连接" { status = "已连接" }
         } catch {
+            // 正在连新连接时，旧会话的报错别去动界面状态。
+            if connecting { return }
             status = "连接中断"
             if !reconnecting, activePassword != nil {
                 Task { await self.reconnect(force: false) }

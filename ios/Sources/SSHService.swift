@@ -10,95 +10,211 @@ final class SSHService {
     private var session: OpaquePointer?
     private var socketFD: Int32 = -1
 
-    func connect(host: String, port: Int, user: String, password: String) async throws {
+    // 取消标记必须能在连接过程中被外部读到，所以用锁保护、不跟 queue 绑在一起：
+    // 连接时 queue 是被占住的，投进来的 block 排队执行等于永远轮不到。
+    private let stateLock = NSLock()
+    private var cancelledFlag = false
+    private var pendingFD: Int32 = -1
+
+    /// 主动中止正在进行的连接。
+    ///
+    /// 置取消标记让阻塞点自己退出，同时 shutdown 掉正在握手的 socket，
+    /// 这样卡在 `connect()`/`libssh2_session_handshake` 里也能立刻返回。
+    func cancelAttempt() {
+        stateLock.lock()
+        cancelledFlag = true
+        let fd = pendingFD
+        stateLock.unlock()
+        if fd >= 0 {
+            Darwin.shutdown(fd, SHUT_RDWR)
+        }
+    }
+
+    private var isCancelled: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return cancelledFlag
+    }
+
+    private func setPendingFD(_ fd: Int32) {
+        stateLock.lock()
+        pendingFD = fd
+        stateLock.unlock()
+    }
+
+    func connect(host: String, port: Int, user: String, password: String,
+                 timeout: TimeInterval = 8) async throws {
+        // 取消标记在派发之前就清掉：万一用户点「停止」比队列排到还早，
+        // 清标记不能把它一起抹掉（放在队列 block 里就有这个时间窗）。
+        stateLock.lock()
+        cancelledFlag = false
+        pendingFD = -1
+        stateLock.unlock()
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
                 self.closeLocked()
                 libssh2_init(0)
 
-                let fd = socket(AF_INET, SOCK_STREAM, 0)
-                guard fd >= 0 else {
-                    continuation.resume(throwing: AppError.message("无法创建 TCP socket"))
-                    return
+                do {
+                    try self.handshakeLocked(host: host, port: port, user: user,
+                                             password: password, timeout: timeout)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
                 }
-
-                var timeout = timeval(tv_sec: 10, tv_usec: 0)
-                setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                           socklen_t(MemoryLayout<timeval>.size))
-                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
-                           socklen_t(MemoryLayout<timeval>.size))
-
-                var address = sockaddr_in()
-                address.sin_family = sa_family_t(AF_INET)
-                address.sin_port = in_port_t(UInt16(port).bigEndian)
-                let parsed = host.withCString { pointer in
-                    inet_pton(AF_INET, pointer, &address.sin_addr)
-                }
-                guard parsed == 1 else {
-                    Darwin.close(fd)
-                    continuation.resume(throwing: AppError.message("路由器地址不是有效的 IPv4"))
-                    return
-                }
-
-                let connectResult = withUnsafePointer(to: &address) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                    }
-                }
-                guard connectResult == 0 else {
-                    let code = errno
-                    Darwin.close(fd)
-                    continuation.resume(throwing: AppError.message(
-                        "TCP 连接失败：\(String(cString: strerror(code)))（errno \(code)）"
-                    ))
-                    return
-                }
-
-                guard let ssh = libssh2_session_init_ex(nil, nil, nil, nil) else {
-                    Darwin.close(fd)
-                    continuation.resume(throwing: AppError.message("libssh2 初始化失败"))
-                    return
-                }
-                libssh2_session_set_blocking(ssh, 1)
-
-                guard libssh2_session_handshake(ssh, fd) == 0 else {
-                    let message = Self.lastError(ssh)
-                    libssh2_session_free(ssh)
-                    Darwin.close(fd)
-                    continuation.resume(throwing: AppError.message("SSH 握手失败：\(message)"))
-                    return
-                }
-
-                let authResult = user.withCString { userPointer in
-                    password.withCString { passwordPointer in
-                        libssh2_userauth_password_ex(
-                            ssh,
-                            userPointer,
-                            UInt32(user.utf8.count),
-                            passwordPointer,
-                            UInt32(password.utf8.count),
-                            nil
-                        )
-                    }
-                }
-                guard authResult == 0 else {
-                    let message = Self.lastError(ssh)
-                    "auth failed".withCString { description in
-                        "".withCString { language in
-                            libssh2_session_disconnect_ex(ssh, 11, description, language)
-                        }
-                    }
-                    libssh2_session_free(ssh)
-                    Darwin.close(fd)
-                    continuation.resume(throwing: AppError.message("SSH 密码认证失败：\(message)"))
-                    return
-                }
-
-                self.session = ssh
-                self.socketFD = fd
-                continuation.resume()
             }
         }
+    }
+
+    /// 建 socket → 握手 → 认证。整个过程都是可中止的。
+    private func handshakeLocked(host: String, port: Int, user: String,
+                                 password: String, timeout: TimeInterval) throws {
+        let fd = try openSocket(host: host, port: port, timeout: timeout)
+        var adopted = false
+        defer {
+            setPendingFD(-1)
+            if !adopted { Darwin.close(fd) }
+        }
+
+        guard let ssh = libssh2_session_init_ex(nil, nil, nil, nil) else {
+            throw AppError.message("libssh2 初始化失败")
+        }
+        var sessionFreed = false
+        defer { if !sessionFreed { libssh2_session_free(ssh) } }
+        libssh2_session_set_blocking(ssh, 1)
+
+        if isCancelled { throw AppError.cancelled }
+        guard libssh2_session_handshake(ssh, fd) == 0 else {
+            // 被 shutdown 打断时握手也会失败，别报成「握手失败」误导用户。
+            if isCancelled { throw AppError.cancelled }
+            throw AppError.message("SSH 握手失败：\(Self.lastError(ssh))")
+        }
+
+        if isCancelled { throw AppError.cancelled }
+        let authResult = user.withCString { userPointer in
+            password.withCString { passwordPointer in
+                libssh2_userauth_password_ex(
+                    ssh,
+                    userPointer,
+                    UInt32(user.utf8.count),
+                    passwordPointer,
+                    UInt32(password.utf8.count),
+                    nil
+                )
+            }
+        }
+        guard authResult == 0 else {
+            let message = Self.lastError(ssh)
+            "auth failed".withCString { description in
+                "".withCString { language in
+                    libssh2_session_disconnect_ex(ssh, 11, description, language)
+                }
+            }
+            if isCancelled { throw AppError.cancelled }
+            throw AppError.message("SSH 密码认证失败：\(message)")
+        }
+        if isCancelled { throw AppError.cancelled }
+
+        self.session = ssh
+        self.socketFD = fd
+        sessionFreed = true
+        adopted = true
+    }
+
+    /// 非阻塞 connect + poll 自己控时。
+    ///
+    /// 阻塞式 `connect()` 在目标不在同一网段时不会按 SO_SNDTIMEO 返回，
+    /// 而要等内核把 SYN 重试完（约 75 秒）——界面就一直卡在「正在连接」。
+    /// 这里改成 200ms 切片轮询，超时可控，中途还能被 cancelAttempt() 打断。
+    private func openSocket(host: String, port: Int, timeout: TimeInterval) throws -> Int32 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw AppError.message("无法创建 TCP socket")
+        }
+
+        // 所有失败出口都走这里：先摘掉 pendingFD 再 close，
+        // 免得 fd 号被系统复用后，后续的 cancelAttempt 误伤别人的 socket。
+        func abort(_ error: Error) -> Error {
+            setPendingFD(-1)
+            Darwin.close(fd)
+            return error
+        }
+
+        var socketTimeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &socketTimeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &socketTimeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        let parsed = host.withCString { pointer in
+            inet_pton(AF_INET, pointer, &address.sin_addr)
+        }
+        guard parsed == 1 else {
+            throw abort(AppError.message("路由器地址不是有效的 IPv4"))
+        }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        let baseFlags = flags < 0 ? Int32(0) : flags
+        _ = fcntl(fd, F_SETFL, baseFlags | O_NONBLOCK)
+        setPendingFD(fd)
+
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if result != 0 {
+            let code = errno
+            if isCancelled {
+                throw abort(AppError.cancelled)
+            }
+            guard code == EINPROGRESS || code == EALREADY else {
+                throw abort(AppError.message(
+                    "TCP 连接失败：\(String(cString: strerror(code)))（errno \(code)）"
+                ))
+            }
+
+            let deadline = Date().addingTimeInterval(timeout)
+            var connected = false
+            while !connected {
+                if isCancelled {
+                    throw abort(AppError.cancelled)
+                }
+                var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                let ready = poll(&descriptor, 1, 200)
+                if ready > 0 {
+                    var socketError: Int32 = 0
+                    var length = socklen_t(MemoryLayout<Int32>.size)
+                    getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length)
+                    if socketError != 0 {
+                        throw abort(AppError.message(
+                            "TCP 连接失败：\(String(cString: strerror(socketError)))"
+                        ))
+                    }
+                    connected = true
+                } else if ready == 0 {
+                    if Date() > deadline {
+                        throw abort(AppError.message(
+                            "连接超时：\(Int(timeout)) 秒内路由器没有响应，请确认手机和路由器在同一网段。"
+                        ))
+                    }
+                } else {
+                    let code = errno
+                    if code == EINTR { continue }
+                    throw abort(AppError.message(
+                        "TCP 连接失败：\(String(cString: strerror(code)))（errno \(code)）"
+                    ))
+                }
+            }
+        }
+
+        // 恢复阻塞模式，后续 libssh2 读写靠 SO_RCVTIMEO 控时。
+        _ = fcntl(fd, F_SETFL, baseFlags)
+        return fd
     }
 
     func execute(_ command: String) async throws -> String {

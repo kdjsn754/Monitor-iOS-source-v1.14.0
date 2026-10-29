@@ -26,6 +26,8 @@ struct ConnectionPopupView: View {
     let startedAt: Date?
     let onDismiss: () -> Void
     let onRetry: () -> Void
+    /// 主动中止这次连接，并退回连接前的状态。
+    let onCancel: () -> Void
 
     @State private var spin = false
 
@@ -209,14 +211,27 @@ struct ConnectionPopupView: View {
     private var buttons: some View {
         switch phase {
         case .connecting:
-            Button {
-                onDismiss()
-            } label: {
-                Text("在后台继续")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 9) {
+                Button {
+                    onCancel()
+                } label: {
+                    Text("停止连接")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+
+                Button {
+                    onDismiss()
+                } label: {
+                    Text("在后台继续")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         case .connected:
             EmptyView()
         case .failed:

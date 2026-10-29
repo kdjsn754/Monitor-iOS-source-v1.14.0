@@ -43,7 +43,8 @@ struct ProxyView: View {
             }
             .background(Color.clear)
             .navigationTitle("网络代理")
-            .toolbarBackground(.hidden, for: .navigationBar)
+            // 见 OverviewView：导航栏背景设成 .hidden 会让内容从标题下面穿过去。
+            .toolbarBackground(.visible, for: .navigationBar)
             .refreshable {
                 await model.manualRefresh()
             }
