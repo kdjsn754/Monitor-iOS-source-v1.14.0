@@ -276,9 +276,7 @@ struct LoginView: View {
                 .opacity(model.connecting ? 0.6 : 1)
 
                 if let error = model.errorMessage {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    ErrorBanner(text: error) { model.clearError() }
                 }
 
                 Text("请确认路由器已启用 SSH，并允许局域网访问。")

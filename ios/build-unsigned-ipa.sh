@@ -60,6 +60,10 @@ if [ ! -d "$APP" ]; then
   exit 1
 fi
 
+# 打完之后再核一遍产物里记录的 SDK，避免「检查过了但打出来还是旧包」。
+BUILT_SDK="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$APP/Info.plist" 2>/dev/null || echo 未知)"
+echo "==> 产物记录的 SDK: $BUILT_SDK（App 里「设置 → 关于 → 构建 SDK」显示的也是它）"
+
 rm -rf build/Payload
 mkdir -p build/Payload
 cp -R "$APP" build/Payload/

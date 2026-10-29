@@ -8,9 +8,12 @@ struct SettingsView: View {
     @State private var confirmLogout = false
     @State private var editorRoute: ConnectionEditorRoute?
     @State private var showRouterWeb = false
-    @State private var showRouters = false
     /// 哪一行的「…」是展开状态。行内操作条，不再是系统菜单浮层。
     @State private var expandedProfileID: UUID?
+    /// 等待确认删除的连接。
+    @State private var pendingDelete: RouterProfile?
+    @State private var confirmDelete = false
+    @State private var screen = ScreenInfo.Snapshot()
 
     var body: some View {
         NavigationStack {
@@ -18,6 +21,7 @@ struct SettingsView: View {
                 VStack(spacing: 14) {
                     PageHeader("设置")
                     routerCard
+                    connectionsCard
                     appearanceCard
                     pollingCard
                     aboutCard
@@ -50,6 +54,7 @@ struct SettingsView: View {
                 }
                 Button("取消", role: .cancel) {}
             }
+            .onAppear { screen = ScreenInfo.current }
         }
     }
 
@@ -72,7 +77,8 @@ struct SettingsView: View {
                         Text(model.currentProfile?.title ?? "还没有连接")
                             .font(.headline)
                             .lineLimit(1)
-                        Text(model.currentProfile?.subtitle ?? "点下面的「新建连接」添加一台路由器")
+                        Text(model.currentProfile?.subtitle
+                             ?? "在下面「已保存连接」里添加一台路由器")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -92,83 +98,223 @@ struct SettingsView: View {
                     }
                 }
 
-                if model.profiles.count > 1 {
-                    Divider().opacity(0.5)
+                // 错误提示：8 秒自动消失，也能点叉立刻收掉。
+                // 以前只在「下一次连接成功」时才清，连不上的红字会一直挂在设置页上，
+                // 除非退出 App 重进——这就是截图里那行一直不走的报错。
+                if let error = model.errorMessage {
+                    ErrorBanner(text: error) { model.clearError() }
+                }
+            }
+        }
+    }
+
+    // MARK: - 已保存连接（整块重做）
+
+    private var connectionsCard: some View {
+        SectionCard("已保存连接", icon: "list.bullet.rectangle") {
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Text(model.profiles.isEmpty
+                         ? "还没有保存过连接"
+                         : "\(model.profiles.count) 个连接，点名称即可切换")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    Spacer(minLength: 6)
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            showRouters.toggle()
-                            if !showRouters { expandedProfileID = nil }
-                        }
+                        expandedProfileID = nil
+                        openEditor(nil)
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "list.bullet")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
-                                .frame(width: 18)
-                            Text("已保存 \(model.profiles.count) 个连接")
-                                .font(.subheadline)
-                            Spacer(minLength: 6)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(showRouters ? 180 : 0))
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("新建")
+                                .font(.caption.weight(.semibold))
                         }
-                        .contentShape(Rectangle())
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.12), in: Capsule())
+                        .foregroundStyle(Color.blue)
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                }
 
-                    if showRouters {
-                        VStack(spacing: 10) {
-                            ForEach(model.profiles) { profile in
-                                routerRow(profile)
+                if model.profiles.isEmpty {
+                    Text("点右上角「新建」填地址和密码，连接成功后会自动存一条。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(model.profiles.enumerated()), id: \.element.id) { index, profile in
+                            if index > 0 {
+                                Divider().opacity(0.5).padding(.leading, 46)
                             }
+                            connectionRow(profile)
                         }
-                        .padding(.leading, 26)
                     }
                 }
 
                 Divider().opacity(0.5)
 
-                HStack(spacing: 8) {
-                    Button {
-                        openEditor(nil)
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "plus.circle")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("新建连接")
-                                .font(.caption.weight(.medium))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.blue.opacity(0.12), in: Capsule())
-                        .foregroundStyle(Color.blue)
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("自动登录")
+                            .font(.subheadline)
+                        Text(model.autoLogin
+                             ? "启动 App 时自动连当前这个连接"
+                             : "启动 App 后停在登录页，手动连接")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
-                    .buttonStyle(.plain)
-
                     Spacer(minLength: 6)
-
-                    Toggle(isOn: Binding(
+                    Toggle("", isOn: Binding(
                         get: { model.autoLogin },
                         set: { model.autoLogin = $0 }
-                    )) {
-                        Text("自动登录")
-                            .font(.caption)
-                    }
+                    ))
+                    .labelsHidden()
                     .toggleStyle(.switch)
-                    .fixedSize()
-                }
-
-                if let error = model.errorMessage {
-                    Text(error)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+        .confirmationDialog(
+            pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { profile in
+            Button("删除连接", role: .destructive) {
+                model.deleteProfile(profile)
+                expandedProfileID = nil
+                pendingDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: { profile in
+            Text(profile.id == model.currentProfileID
+                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
+                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
+        }
+    }
+
+    /// 一行连接：左边点一下切换，右边「…」展开编辑 / 删除。
+    private func connectionRow(_ profile: RouterProfile) -> some View {
+        let isCurrent = profile.id == model.currentProfileID
+        let expanded = expandedProfileID == profile.id
+        let isConnecting = model.connecting
+            && model.attemptTarget?.profile.id == profile.id
+
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    guard !isCurrent else { return }
+                    expandedProfileID = nil
+                    Task { await model.switchTo(profile) }
+                } label: {
+                    HStack(spacing: 10) {
+                        ZStack {
+                            Circle()
+                                .fill(isCurrent ? Color.blue.opacity(0.14) : Color(.tertiarySystemFill))
+                                .frame(width: 34, height: 34)
+                            Image(systemName: isCurrent ? "wifi.router.fill" : "wifi.router")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(isCurrent ? Color.blue : Color.secondary)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.title)
+                                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(profile.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isCurrent)
+
+                if isConnecting {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else if isCurrent {
+                    Text("当前")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.14), in: Capsule())
+                        .foregroundStyle(.green)
+                }
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        expandedProfileID = expanded ? nil : profile.id
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(expanded ? Color.blue : Color.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            expanded ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill),
+                            in: Circle()
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 9)
+
+            if expanded {
+                HStack(spacing: 8) {
+                    rowAction("编辑", icon: "pencil", tint: .blue) {
+                        expandedProfileID = nil
+                        openEditor(profile)
+                    }
+                    rowAction("删除", icon: "trash", tint: .red) {
+                        pendingDelete = profile
+                        confirmDelete = true
+                    }
+                }
+                .padding(.leading, 44)
+                .padding(.bottom, 10)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private func rowAction(_ title: String, icon: String, tint: Color,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(title)
+                    .font(.caption.weight(.medium))
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(tint.opacity(0.10), in: Capsule())
+            .foregroundStyle(tint)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var statusPill: some View {
@@ -208,92 +354,6 @@ struct SettingsView: View {
         editorRoute = profile.map(ConnectionEditorRoute.edit) ?? .new
     }
 
-    private func routerRow(_ profile: RouterProfile) -> some View {
-        let isCurrent = profile.id == model.currentProfileID
-        let expanded = expandedProfileID == profile.id
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 9) {
-                Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
-                    .font(.caption)
-                    .foregroundStyle(isCurrent ? Color.blue : Color(.tertiaryLabel))
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profile.title)
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
-                    Text(profile.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 6)
-
-                // 以前这里是系统的 Menu。Menu 飘在独立图层上，动作一执行连接弹窗就
-                // 盖上来，而菜单还在自己收，两个浮层就叠在一起（截图里那团错乱）。
-                // 改成行内展开之后，没有任何浮层，也就不可能叠。
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        expandedProfileID = expanded ? nil : profile.id
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(expanded ? Color.blue : Color.secondary)
-                        .frame(width: 26, height: 26)
-                        .background(
-                            expanded ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill),
-                            in: Circle()
-                        )
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isCurrent else { return }
-                Task { await model.switchTo(profile) }
-            }
-
-            if expanded {
-                HStack(spacing: 6) {
-                    rowAction("切换", icon: "arrow.triangle.2.circlepath", tint: .blue) {
-                        expandedProfileID = nil
-                        Task { await model.switchTo(profile) }
-                    }
-                    rowAction("编辑", icon: "pencil", tint: .primary) {
-                        expandedProfileID = nil
-                        openEditor(profile)
-                    }
-                    rowAction("删除", icon: "trash", tint: .red) {
-                        expandedProfileID = nil
-                        model.deleteProfile(profile)
-                    }
-                }
-                .padding(.leading, 26)
-                .transition(.opacity)
-            }
-        }
-    }
-
-    private func rowAction(_ title: String, icon: String, tint: Color,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(title)
-                    .font(.caption2.weight(.medium))
-            }
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .background(tint.opacity(0.10), in: Capsule())
-            .foregroundStyle(tint)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 
     // MARK: - 外观
 
@@ -421,23 +481,57 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 9) {
-                infoRow("版本", "1.21.0")
+                infoRow("版本", "1.22.0")
                 infoRow("连接方式", "SSH 直连")
+                infoRow("屏幕", screen.sizeText)
+                infoRow("运行模式", screen.modeText,
+                        color: screen.isLetterboxed ? .orange : .secondary)
+                infoRow("构建 SDK", ScreenInfo.sdkName,
+                        color: sdkIsOld ? .orange : .secondary)
                 infoRow("采集范围", "只采当前页面要用的数据")
                 infoRow("数据去向", "只在本机与路由器之间")
+
+                if screen.isLetterboxed {
+                    // 这条不是布局问题：系统不认识这块屏，就把界面整体放大到物理像素上，
+                    // 上下自然留出黑边。App 内改不了窗口大小，只能换新 SDK 重打包。
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("系统把界面按 \(Int(screen.size.width.rounded()))×\(Int(screen.size.height.rounded())) 排版后放大，"
+                             + "所以上下有黑边。请用 Xcode 16 及以上（iOS 18+ SDK）重新打包，"
+                             + "界面上无法绕过。")
+                            .font(.caption2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
 
-    private func infoRow(_ title: String, _ value: String) -> some View {
+    /// 构建 SDK 低于 ios 26 就说明工具链太老，正是黑边的来源。
+    private var sdkIsOld: Bool {
+        let name = ScreenInfo.sdkName            // 形如 iphoneos26.0
+        let rest = name.contains("iphoneos")
+            ? String(name.dropFirst("iphoneos".count))
+            : name
+        let major = rest.split(separator: ".").first.flatMap { Int($0) } ?? 0
+        return major > 0 && major < 26
+    }
+
+    private func infoRow(_ title: String, _ value: String,
+                         color: Color = .secondary) -> some View {
         HStack {
             Text(title)
                 .font(.subheadline)
             Spacer(minLength: 8)
             Text(value)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(color)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 
@@ -600,7 +694,7 @@ private struct ConnectionEditorView: View {
 
                 if let error = model.errorMessage {
                     Section {
-                        Text(error).font(.caption).foregroundStyle(.red)
+                        ErrorBanner(text: error) { model.clearError() }
                     }
                 }
             }

@@ -110,6 +110,48 @@ struct HeaderButton: View {
     }
 }
 
+/// 一条可关闭的错误提示。
+///
+/// 旧版把错误直接当三行红字贴在卡片底部，既占地方又不会自己消失。
+/// 现在收成一条浅红底的横幅：最多两行、带叉，点掉就没了。
+struct ErrorBanner: View {
+    let text: String
+    var onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.red)
+                .padding(.top, 1)
+
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.red.opacity(0.85))
+                        .frame(width: 20, height: 20)
+                        .background(Color.red.opacity(0.10), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭提示")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color.red.opacity(0.09),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
 struct GlassProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

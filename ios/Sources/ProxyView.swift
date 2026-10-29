@@ -6,6 +6,7 @@ struct ProxyView: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedConfig = ""
     @State private var showPanel = false
+    @State private var isChecking = false
 
     private var oc: OpenClashInfo { model.openClash }
     private var metrics: OpenClashMetrics { model.ocMetrics }
@@ -42,6 +43,7 @@ struct ProxyView: View {
                     trafficCard
                     runtimeCard
                     configCard
+                    panelCard
                     accessCard
                 }
                 .padding(.horizontal, 16)
@@ -287,13 +289,13 @@ struct ProxyView: View {
                     in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
-    // MARK: - 配置与控制面板
+    // MARK: - 配置
 
     private var configCard: some View {
-        SectionCard("配置与控制面板", icon: "doc.text") {
+        SectionCard("代理配置", icon: "doc.text") {
             VStack(spacing: 12) {
                 HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("当前配置")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -346,7 +348,7 @@ struct ProxyView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 11)
                             .background(
                                 Color.blue.opacity(canSwitchConfig ? 0.14 : 0.06),
                                 in: Capsule()
@@ -356,38 +358,95 @@ struct ProxyView: View {
                     .buttonStyle(.plain)
                     .disabled(!canSwitchConfig || model.busy)
                 }
-
-                Divider().opacity(0.5)
-
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("控制面板")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(oc.panelURL?.absoluteString ?? "未获取到地址")
-                            .font(.caption)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 6)
-
-                    Button {
-                        showPanel = true
-                    } label: {
-                        Text("打开")
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color(.tertiarySystemFill), in: Capsule())
-                            .foregroundStyle(.primary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!oc.running || oc.panelURL == nil)
-                    .opacity(!oc.running || oc.panelURL == nil ? 0.45 : 1)
-                }
             }
         }
+    }
+
+    // MARK: - 控制面板
+
+    /// 单独一张卡：以前它挤在别人卡片最底下，只剩一个 12pt 字的「打开」小胶囊，
+    /// 又小又难点。现在有图标、地址、状态，整条 44pt 高的主按钮。
+    private var panelCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.blue)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("控制面板")
+                        .font(.subheadline.weight(.semibold))
+                    Text(panelAddress)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 6)
+
+                Text(canOpenPanel ? "可打开" : "未就绪")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        (canOpenPanel ? Color.green : Color.orange).opacity(0.14),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(canOpenPanel ? Color.green : Color.orange)
+            }
+
+            Button {
+                showPanel = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "safari.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("打开控制面板")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(
+                    canOpenPanel ? Color.blue : Color(.systemGray4),
+                    in: Capsule()
+                )
+                .foregroundStyle(canOpenPanel ? Color.white : Color(.systemGray))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpenPanel)
+
+            Text(panelHint)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private var canOpenPanel: Bool {
+        oc.running && oc.panelURL != nil
+    }
+
+    private var panelAddress: String {
+        guard let host = model.currentProfile?.host else { return "未获取到地址" }
+        let base = "\(host):\(oc.panelPort)"
+        return oc.dashboard.isEmpty ? base : "\(base) · \(oc.dashboard)"
+    }
+
+    private var panelHint: String {
+        if !oc.installed { return "没有检测到 OpenClash，装好插件后这里会自动出现面板地址。" }
+        if !oc.running { return "OpenClash 已停止，启动之后才能打开控制面板。" }
+        if oc.panelURL == nil { return "还没读到面板端口，等一轮采集（约 2 秒）再试。" }
+        return "面板会带上当前门户密码直接登录，不需要再输一次。"
     }
 
     // MARK: - 访问检查
@@ -395,41 +454,79 @@ struct ProxyView: View {
     private var accessCard: some View {
         SectionCard("访问检查", icon: "globe.asia.australia") {
             VStack(spacing: 12) {
-                if model.accessChecks.isEmpty {
-                    Text("还没有检查结果，点下面的按钮跑一次。")
+                HStack(spacing: 6) {
+                    Text(lastCheckText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    LazyVGrid(columns: [
-                        GridItem(.flexible(), spacing: 10),
-                        GridItem(.flexible(), spacing: 10)
-                    ], spacing: 10) {
-                        ForEach(model.accessChecks) { check in
-                            accessTile(check)
-                        }
+                    Spacer(minLength: 6)
+                    if testedCount > 0 {
+                        Text("\(okCount)/\(testedCount) 可达")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(okCount == testedCount ? Color.green : Color.orange)
+                    }
+                }
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 10),
+                    GridItem(.flexible(), spacing: 10)
+                ], spacing: 10) {
+                    ForEach(model.accessChecks) { check in
+                        accessTile(check)
                     }
                 }
 
                 Button {
-                    Task { await model.checkAccess() }
+                    Task {
+                        isChecking = true
+                        await model.checkAccess()
+                        isChecking = false
+                    }
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(model.busy ? "检测中…" : "重新检测")
+                        if isChecking {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        Text(isChecking ? "检测中…" : "重新检测")
                             .font(.caption.weight(.medium))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 10)
                     .background(Color(.tertiarySystemFill), in: Capsule())
                     .foregroundStyle(.primary)
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(model.busy)
+                .disabled(isChecking || model.busy)
+
+                Text("进入网络代理页、拿到状态后会自动检测一次。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
+
+    private var testedCount: Int {
+        model.accessChecks.filter(\.tested).count
+    }
+
+    private var okCount: Int {
+        model.accessChecks.filter { $0.tested && $0.success }.count
+    }
+
+    private var lastCheckText: String {
+        guard let date = model.lastAccessCheckAt else { return "还没有检测结果" }
+        return "最近检测 " + Self.timeFormatter.string(from: date)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
 
     private func accessTile(_ check: AccessCheck) -> some View {
         VStack(alignment: .leading, spacing: 5) {

@@ -68,6 +68,12 @@ final class AppModel: ObservableObject {
     /// 弹窗的标题和「重试」得靠它，不能用 currentProfile。
     @Published private(set) var attemptTarget: (profile: RouterProfile, password: String)?
     private var pollTask: Task<Void, Never>?
+    /// 错误提示的自动消失计时器。
+    private var errorExpiry: Task<Void, Never>?
+    /// 网络代理页「拿到状态后跑一次访问检测」的开关，进页面置真、跑完置假。
+    private var pendingAccessCheck = false
+    /// 最近一次访问检测的时间，界面上用来显示「最近检测 xx:xx」。
+    @Published private(set) var lastAccessCheckAt: Date?
     private var activePassword: String?
     private var lastSuccessfulPoll: Date?
     private var lastReconnectAttempt: Date?
@@ -125,7 +131,7 @@ final class AppModel: ObservableObject {
                  label: String = "", webPort: Int = 80) async {
         let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanHost.isEmpty, !password.isEmpty else {
-            errorMessage = "请填写路由器地址和密码"
+            presentError("请填写路由器地址和密码")
             return
         }
 
@@ -170,7 +176,7 @@ final class AppModel: ObservableObject {
 
         connecting = true
         lastConnectFailed = false
-        errorMessage = nil
+        clearError()
         status = "正在连接…"
 
         let attempt = SSHService()
@@ -197,7 +203,7 @@ final class AppModel: ObservableObject {
         attemptTarget = nil
         connecting = false
         lastConnectFailed = false
-        errorMessage = nil
+        clearError()
         currentProfileID = profile.id
         sessionProfileID = profile.id
         connected = true
@@ -214,6 +220,8 @@ final class AppModel: ObservableObject {
         history = []
         await bootstrapRefresh()
         startPolling()
+        // 连上时如果正停在网络代理页，同样要补一次访问检测。
+        pendingAccessCheck = activePage == .proxy
         return true
     }
 
@@ -225,7 +233,7 @@ final class AppModel: ObservableObject {
         attemptService = nil
         connecting = false
         lastConnectFailed = false
-        errorMessage = nil
+        clearError()
         restoreFallback(cancelled: true)
     }
 
@@ -234,11 +242,11 @@ final class AppModel: ObservableObject {
         attemptService = nil
         connecting = false
         if case AppError.cancelled = error {
-            errorMessage = nil
+            clearError()
             lastConnectFailed = false
             restoreFallback(cancelled: true)
         } else {
-            errorMessage = describe(error)
+            presentError(describe(error), seconds: 12)
             lastConnectFailed = true
             restoreFallback(cancelled: false)
         }
@@ -268,8 +276,46 @@ final class AppModel: ObservableObject {
     }
 
     private func describe(_ error: Error) -> String {
+        // 旧版这里把 NSError 的 domain / code 和 `String(describing:)` 一起拼进去，
+        // 界面上就是三行「连接超时…\n[OpenWrtMonitor.AppError 0]\nAppError.message(...)」，
+        // 又长又不像是给人看的。这里只给一句人话。
+        if let app = error as? AppError {
+            switch app {
+            case .notConnected: return "SSH 会话已断开"
+            case .cancelled: return "已取消连接"
+            case .message(let text): return text
+            }
+        }
         let ns = error as NSError
-        return "\(ns.localizedDescription)\n[\(ns.domain) \(ns.code)]\n\(String(describing: error))"
+        if ns.domain == NSURLErrorDomain {
+            return "网络请求失败：\(ns.localizedDescription)"
+        }
+        let text = ns.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "操作失败，请重试" : text
+    }
+
+    /// 统一出口：设置错误并且**自动过期**。
+    ///
+    /// 以前 `errorMessage` 只在「下一次连接成功」时被清掉，于是连接失败后那行红字
+    /// 会一直挂在设置页上，除非退出 App 重进。现在 8 秒后自动淡出，
+    /// 用户也可以点右边的叉立刻收掉。
+    func presentError(_ message: String, seconds: Double = 8) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        errorMessage = text
+        errorExpiry?.cancel()
+        errorExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(seconds * 1000)))
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            if self.errorMessage == text { self.errorMessage = nil }
+        }
+    }
+
+    func clearError() {
+        errorExpiry?.cancel()
+        errorExpiry = nil
+        errorMessage = nil
     }
 
     func autoConnectIfPossible() async {
@@ -284,7 +330,7 @@ final class AppModel: ObservableObject {
         guard let password = KeychainStore.loadPassword(
             account: KeychainStore.passwordAccount(for: profile)
         ) else {
-            errorMessage = "该连接没有保存密码，请重新输入"
+            presentError("这个连接没有保存密码，请点「编辑」重新填一次")
             return
         }
         currentProfileID = profile.id
@@ -336,16 +382,25 @@ final class AppModel: ObservableObject {
 
     func deleteProfile(_ profile: RouterProfile) {
         KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
+        // 删掉的正好是当前会话时，SSH 其实还连着那台：不断开的话界面会停在
+        // 「已连接」上，可它已经不在列表里了，重连、刷新、编辑全都指向空。
+        let wasSession = profile.id == sessionProfileID
         profiles.removeAll { $0.id == profile.id }
         if currentProfileID == profile.id {
             currentProfileID = profiles.first?.id
         }
         saveProfiles()
+        if wasSession {
+            // keepPassword 为真：这个连接的密码上面已经删了，
+            // 别让 disconnect 顺手把「新选中的那条」的密码也删掉。
+            Task { await disconnect(keepPassword: true) }
+        }
     }
 
     func disconnect(keepPassword: Bool = false) async {
         pollTask?.cancel()
         pollTask = nil
+        pendingAccessCheck = false
         ssh.disconnect()
         attemptService?.cancelAttempt()
         attemptService = nil
@@ -435,11 +490,11 @@ final class AppModel: ObservableObject {
             reconnecting = false
             lastReconnectAttempt = nil
             status = "已连接"
-            errorMessage = nil
+            clearError()
         } catch {
             reconnecting = false
             status = "连接中断"
-            errorMessage = describe(error)
+            presentError(describe(error), seconds: 12)
             if connected {
                 startPolling()
             }
@@ -493,6 +548,8 @@ final class AppModel: ObservableObject {
     /// 切换标签页：立刻为这一页取一次数据，然后按新的一组项继续轮询。
     func setActivePage(_ page: AppPage) {
         guard page != activePage else { return }
+        // 离开网络代理页就把还没跑的自动检测作废，别在别的页面上偷偷跑 curl。
+        pendingAccessCheck = page == .proxy
         activePage = page
         guard connected else { return }
         startPolling(refreshNow: true)
@@ -551,6 +608,12 @@ final class AppModel: ObservableObject {
             try await runItems(items)
             lastSuccessfulPoll = Date()
             if !connecting, status != "已连接" { status = "已连接" }
+            // 网络代理页：第一次拿到状态之后，顺手跑一次访问检测，
+            // 省得进页面还得自己点一下「重新检测」。
+            if activePage == .proxy, pendingAccessCheck {
+                pendingAccessCheck = false
+                Task { await self.checkAccess(silent: true) }
+            }
         } catch {
             // 正在连新连接时，旧会话的报错别去动界面状态。
             if connecting { return }
@@ -731,13 +794,13 @@ final class AppModel: ObservableObject {
             let sections = parseSections(try await execute(command(for: [.clashState])))
             openClash = parseOpenClashInfo(sections, current: openClash)
         } catch {
-            errorMessage = error.localizedDescription
+            presentError(describe(error))
         }
     }
 
     func startOpenClash() async {
         if openClash.running {
-            errorMessage = nil
+            clearError()
             status = "OpenClash 已启动"
             return
         }
@@ -747,7 +810,7 @@ final class AppModel: ObservableObject {
 
     func stopOpenClash() async {
         if !openClash.running {
-            errorMessage = nil
+            clearError()
             status = "OpenClash 已关闭"
             return
         }
@@ -786,35 +849,64 @@ final class AppModel: ObservableObject {
             await refreshOpenClash()
             status = "已连接"
         } catch {
-            errorMessage = error.localizedDescription
+            presentError(describe(error))
         }
     }
 
-    func checkAccess() async {
+    /// 访问检测。
+    /// - Parameter silent: 「刚拿到状态顺手跑一次」用的静默模式：不弹全屏遮罩、
+    ///   失败不弹红字，只在格子里显示结果，也不打扰正在进行的轮询。
+    func checkAccess(silent: Bool = false) async {
         guard connected else { return }
-        busy = true
-        defer { busy = false }
+        if silent {
+            // 快速来回切标签页时不重复跑；正在跑别的操作也让路。
+            if let last = lastAccessCheckAt, Date().timeIntervalSince(last) < 15 { return }
+            if busy { return }
+            // 先让这一轮的数据落到界面上，再去跑检测。
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard connected, !Task.isCancelled else { return }
+        }
+        lastAccessCheckAt = Date()
+        if !silent { busy = true }
+        defer { if !silent { busy = false } }
+
         do {
             let sections = parseSections(try await execute(accessCommand))
+            let text = sections["CHECK"] ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                if !silent { presentError("访问检测没有返回结果，请确认路由器可以执行 curl") }
+                return
+            }
             var results: [AccessCheck.Site: (Bool, Int)] = [:]
-            for line in (sections["CHECK"] ?? "").split(separator: "\n") {
-                let fields = line.split(separator: "\t").map(String.init)
-                guard fields.count >= 4, fields[0] == "C",
+            for line in text.split(separator: "\n") {
+                let fields = line.split(separator: " ").map(String.init)
+                guard fields.count >= 3, fields[0] == "C",
                       let site = AccessCheck.Site(rawValue: fields[1]) else { continue }
-                results[site] = (fields[2] == "1", Int(fields[3]) ?? 0)
+                let code = fields[2]
+                let seconds = Double(fields.count > 3 ? fields[3] : "") ?? 0
+                let ok = code != "000" && !code.isEmpty && seconds > 0
+                results[site] = (ok, ok ? Int((seconds * 1000).rounded()) : 0)
+            }
+            guard !results.isEmpty else {
+                if !silent { presentError("访问检测没有返回结果，请确认路由器可以执行 curl") }
+                return
             }
             accessChecks = AccessCheck.Site.allCases.map { site in
                 let previous = accessChecks.first { $0.site == site }
+                guard let result = results[site] else { return previous ?? AccessCheck(site: site) }
                 var check = AccessCheck(site: site, tested: true)
-                if let result = results[site] {
-                    check.success = result.0
-                    check.latency = result.1
+                check.success = result.0
+                check.latency = result.1
+                if result.0 {
                     check.history = Array(((previous?.history ?? []) + [result.1]).suffix(10))
+                } else {
+                    check.history = previous?.history ?? []
                 }
                 return check
             }
+            if !silent { clearError() }
         } catch {
-            errorMessage = error.localizedDescription
+            if !silent { presentError(describe(error)) }
         }
     }
 
@@ -941,6 +1033,17 @@ final class AppModel: ObservableObject {
             let remainder = system &+ app
             available = total > remainder ? total - remainder : 0
         }
+
+        // 让「系统 + 应用 + 可用」自己成为总量。
+        //
+        // OpenWrt 上 /rom 是只读 squashfs（df 的 Used 就是整块固件），/overlay 是另一块
+        // 分区、各报各的总量。之前拿 /overlay 的 1K-blocks 当 total，再把它和 /rom 的
+        // 用量相加，就会算成「已用 30 MB、剩余 90 MB、共 100 MB」——已用加剩余超过总量，
+        // 进度条（三段各自归一）也就和右上角的百分比对不上。三段同源，用它们的和做分母，
+        // 三个数字和条就永远一致。
+        let sum = system &+ app &+ available
+        if sum > 0 { total = sum }
+
         flashInfo = FlashInfo(
             total: total,
             systemUsed: system,
@@ -1413,17 +1516,20 @@ private extension AppModel {
         return lowPriority(parts.joined(separator: "\n"))
     }
 
+    /// 访问检测脚本。
+    ///
+    /// 四个站点**并行**探（各 `&` 后台跑，最后 `wait`），所以整条命令最多花一个
+    /// `-m 4` 的时间，而不是四个串起来 20 秒——SSH 通道是串行的，串行检测会把
+    /// 正在跑的轮询一起堵住。毫秒换算也挪回 Swift 侧，不再为每条结果 fork 一次 awk。
     var accessCommand: String {
         lowPriority("""
         echo @@CHECK
-        check(){ key=$1; domain=$2; r=$(curl -sIL -m 5 -o /dev/null -w '%{http_code} %{time_total}' "https://$domain" 2>/dev/null); code=${r%% *}; sec=${r##* }
-        if [ -n "$code" ] && [ "$code" != "000" ] && [ -n "$sec" ]; then
-          ms=$(awk "BEGIN{printf \\"%d\\", $sec*1000}")
-          printf 'C\\t%s\\t1\\t%s\\n' "$key" "$ms"
-        else
-          printf 'C\\t%s\\t0\\t0\\n' "$key"
-        fi; }
-        check baidu www.baidu.com; check netease music.163.com; check github github.com; check youtube www.youtube.com
+        p(){ r=$(curl -s -o /dev/null -L -m 4 -w '%{http_code} %{time_total}' "https://$2" 2>/dev/null); printf 'C %s %s\\n' "$1" "$r"; }
+        p baidu www.baidu.com &
+        p netease music.163.com &
+        p github github.com &
+        p youtube www.youtube.com &
+        wait
         """)
     }
 }

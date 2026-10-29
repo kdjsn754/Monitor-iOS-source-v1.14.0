@@ -149,7 +149,9 @@ struct AccessCheck: Identifiable {
         }
     }
 
-    let id = UUID()
+    /// 用站点做标识，不用新建 UUID：每次检测都会重建数组，
+    /// 用 UUID 会让 SwiftUI 认为所有格子都换了新的，整块重新插入、动画乱闪。
+    var id: String { site.id }
     var site: Site
     var success = false
     var latency: Int = 0
@@ -165,49 +167,35 @@ struct FlashInfo {
 
     var hasData: Bool { total > 0 }
 
-    var systemFraction: Double {
-        total > 0 ? min(1, Double(systemUsed) / Double(total)) : 0
-    }
-
-    var appFraction: Double {
-        total > 0 ? min(1, Double(appUsed) / Double(total)) : 0
-    }
-
-    var availableFraction: Double {
-        max(0, 1 - systemFraction - appFraction)
-    }
-
-    /// 三段之和可能和 total 对不上（/rom 是只读的 squashfs，df 报的是整块固件大小，
-    /// /overlay 报的是另一块分区）。按三段自身归一，进度条才不会被撑出边界。
-    private var segmentSum: Double {
-        let sum = Double(systemUsed) + Double(appUsed) + Double(available)
-        return sum > 0 ? sum : 1
-    }
-
-    var systemShare: Double {
-        min(1, max(0, Double(systemUsed) / segmentSum))
-    }
-
-    var appShare: Double {
-        min(1 - systemShare, max(0, Double(appUsed) / segmentSum))
-    }
-
-    var availableShare: Double {
-        max(0, 1 - systemShare - appShare)
-    }
-
-    /// 已用字节数：总容量减可用容量，兜底用系统 + 应用之和。
+    /// 三段共用同一个分母（total 由 系统 + 应用 + 可用 三者在解析时凑齐），
+    /// 所以「已用 + 剩余 = 共」永远成立，进度条填到哪儿和右上角的百分比是同一个数。
+    /// 旧版把三段各自归一，结果出现「已用 30 MB、剩余 90 MB、共 100 MB」这种
+    /// 加起来超过总容量的组合，条的填充比例也和百分比对不上。
     var usedBytes: UInt64 {
         guard total > 0 else { return 0 }
-        let sum = systemUsed &+ appUsed
-        let derived = total > available ? total - available : 0
-        return min(total, max(derived, sum))
+        return min(total, systemUsed &+ appUsed)
     }
 
-    /// 已用占比，用于总览数字和颜色档位。
     var usedFraction: Double {
         total > 0 ? min(1, Double(usedBytes) / Double(total)) : 0
     }
+
+    private func share(_ bytes: UInt64) -> Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, Double(bytes) / Double(total)))
+    }
+
+    var systemShare: Double { share(systemUsed) }
+
+    /// 应用段不能越界：两段加起来最多占满整条。
+    var appShare: Double { min(1 - systemShare, share(appUsed)) }
+
+    var availableShare: Double { max(0, 1 - systemShare - appShare) }
+
+    /// 兼容旧调用点。
+    var systemFraction: Double { systemShare }
+    var appFraction: Double { appShare }
+    var availableFraction: Double { availableShare }
 }
 
 struct HistoryPoint: Identifiable {
