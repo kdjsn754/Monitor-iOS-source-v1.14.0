@@ -18,6 +18,10 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("themeMode") private var themeMode = "system"
 
+    // 连接弹窗：只在“发起连接”时出现，成功后自动收起，失败给重试。
+    @State private var popupPhase: ConnectionPhase?
+    @State private var connectStartedAt: Date?
+
     var body: some View {
         ZStack {
             AppBackground()
@@ -27,6 +31,17 @@ struct RootView: View {
                 } else {
                     LoginView()
                 }
+            }
+            if let phase = popupPhase {
+                ConnectionPopupView(
+                    phase: phase,
+                    routerTitle: model.currentProfile?.title ?? "路由器",
+                    routerSubtitle: model.currentProfile?.subtitle ?? "",
+                    startedAt: connectStartedAt,
+                    onDismiss: { dismissPopup() },
+                    onRetry: { retryConnect() }
+                )
+                .zIndex(2)
             }
             if model.reconnecting || model.activityTitle != nil {
                 ZStack {
@@ -55,6 +70,26 @@ struct RootView: View {
         }
         .preferredColorScheme(colorScheme)
         .tint(.blue)
+        .animation(.easeInOut(duration: 0.2), value: popupPhase)
+        .onChange(of: model.connecting) { _, isConnecting in
+            if isConnecting {
+                connectStartedAt = Date()
+                popupPhase = .connecting
+            } else if popupPhase?.isConnecting == true {
+                if model.connected {
+                    finishPopup()
+                } else if let message = model.errorMessage {
+                    popupPhase = .failed(message)
+                } else {
+                    dismissPopup()
+                }
+            }
+        }
+        .onChange(of: model.connected) { _, isConnected in
+            if isConnected, popupPhase?.isConnecting == true {
+                finishPopup()
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
@@ -66,6 +101,35 @@ struct RootView: View {
                 break
             }
         }
+    }
+
+    /// 连上了：先让弹窗停一下显示成功，再自己收起来。
+    private func finishPopup() {
+        popupPhase = .connected
+        Task {
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            if popupPhase?.isConnected == true {
+                withAnimation { popupPhase = nil }
+            }
+        }
+    }
+
+    private func dismissPopup() {
+        withAnimation { popupPhase = nil }
+        connectStartedAt = nil
+    }
+
+    private func retryConnect() {
+        guard let profile = model.currentProfile,
+              let password = KeychainStore.loadPassword(
+                  account: KeychainStore.passwordAccount(for: profile)
+              ) else {
+            dismissPopup()
+            return
+        }
+        connectStartedAt = Date()
+        popupPhase = .connecting
+        Task { await model.connect(profile: profile, password: password) }
     }
 
     private var colorScheme: ColorScheme? {
