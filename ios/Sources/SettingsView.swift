@@ -9,6 +9,8 @@ struct SettingsView: View {
     @State private var editorRoute: ConnectionEditorRoute?
     @State private var showRouterWeb = false
     @State private var showRouters = false
+    /// 哪一行的「…」是展开状态。行内操作条，不再是系统菜单浮层。
+    @State private var expandedProfileID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -94,7 +96,10 @@ struct SettingsView: View {
                     Divider().opacity(0.5)
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { showRouters.toggle() }
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            showRouters.toggle()
+                            if !showRouters { expandedProfileID = nil }
+                        }
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "list.bullet")
@@ -203,66 +208,91 @@ struct SettingsView: View {
         editorRoute = profile.map(ConnectionEditorRoute.edit) ?? .new
     }
 
-    /// 系统菜单的收起动画和它要触发的界面变化在抢同一帧：
-    /// 从「…」里点「切换到这个连接」，连接弹窗会立刻盖上来，而菜单还在自己收，
-    /// 结果菜单就叠在弹窗上面，看起来像花屏。
-    /// 这里先等菜单收完（约 0.25 秒）再改状态，两个浮层就不会撞在一起。
-    private func afterMenuCloses(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 280_000_000)
-            action()
+    private func routerRow(_ profile: RouterProfile) -> some View {
+        let isCurrent = profile.id == model.currentProfileID
+        let expanded = expandedProfileID == profile.id
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 9) {
+                Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
+                    .font(.caption)
+                    .foregroundStyle(isCurrent ? Color.blue : Color(.tertiaryLabel))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(profile.title)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Text(profile.subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 6)
+
+                // 以前这里是系统的 Menu。Menu 飘在独立图层上，动作一执行连接弹窗就
+                // 盖上来，而菜单还在自己收，两个浮层就叠在一起（截图里那团错乱）。
+                // 改成行内展开之后，没有任何浮层，也就不可能叠。
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        expandedProfileID = expanded ? nil : profile.id
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(expanded ? Color.blue : Color.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            expanded ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill),
+                            in: Circle()
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isCurrent else { return }
+                Task { await model.switchTo(profile) }
+            }
+
+            if expanded {
+                HStack(spacing: 6) {
+                    rowAction("切换", icon: "arrow.triangle.2.circlepath", tint: .blue) {
+                        expandedProfileID = nil
+                        Task { await model.switchTo(profile) }
+                    }
+                    rowAction("编辑", icon: "pencil", tint: .primary) {
+                        expandedProfileID = nil
+                        openEditor(profile)
+                    }
+                    rowAction("删除", icon: "trash", tint: .red) {
+                        expandedProfileID = nil
+                        model.deleteProfile(profile)
+                    }
+                }
+                .padding(.leading, 26)
+                .transition(.opacity)
+            }
         }
     }
 
-    private func routerRow(_ profile: RouterProfile) -> some View {
-        let isCurrent = profile.id == model.currentProfileID
-        return HStack(spacing: 9) {
-            Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
-                .font(.caption)
-                .foregroundStyle(isCurrent ? Color.blue : Color(.tertiaryLabel))
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(profile.title)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                Text(profile.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    private func rowAction(_ title: String, icon: String, tint: Color,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(title)
+                    .font(.caption2.weight(.medium))
             }
-
-            Spacer(minLength: 6)
-
-            Menu {
-                Button {
-                    afterMenuCloses { Task { await model.switchTo(profile) } }
-                } label: {
-                    Label("切换到这个连接", systemImage: "arrow.triangle.2.circlepath")
-                }
-                Button {
-                    afterMenuCloses { openEditor(profile) }
-                } label: {
-                    Label("编辑", systemImage: "pencil")
-                }
-                Divider()
-                Button(role: .destructive) {
-                    afterMenuCloses { model.deleteProfile(profile) }
-                } label: {
-                    Label("删除", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                    .background(Color(.tertiarySystemFill), in: Circle())
-            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(tint.opacity(0.10), in: Capsule())
+            .foregroundStyle(tint)
+            .contentShape(Capsule())
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isCurrent else { return }
-            Task { await model.switchTo(profile) }
-        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 外观
@@ -391,7 +421,7 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 9) {
-                infoRow("版本", "1.20.0")
+                infoRow("版本", "1.21.0")
                 infoRow("连接方式", "SSH 直连")
                 infoRow("采集范围", "只采当前页面要用的数据")
                 infoRow("数据去向", "只在本机与路由器之间")

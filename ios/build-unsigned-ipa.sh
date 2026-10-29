@@ -19,6 +19,21 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
+# 在 Xcode 26 以下的工具链里，iOS SDK 不认识 iPhone 17 这一代屏幕尺寸，
+# 系统会把 App 按兼容模式运行：内容缩在中间，上下各一条黑边。
+SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo 0)"
+SDK_MAJOR="${SDK_VERSION%%.*}"
+echo "==> iphoneos SDK: $SDK_VERSION"
+if [ "${SDK_MAJOR:-0}" -lt 26 ]; then
+  cat <<EOS
+当前 Xcode 的 iOS SDK 是 $SDK_VERSION，低于 26。
+用它打出来的包在 iPhone 17 / iOS 27 上会被系统按兼容模式运行（上下有黑边）。
+请换用 Xcode 26 及以上版本（sudo xcode-select -s /Applications/Xcode.app），或改用
+GitHub Actions 里的 macos-26 产物。
+EOS
+  exit 1
+fi
+
 xcodegen generate
 
 mkdir -p build

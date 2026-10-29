@@ -2,6 +2,22 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.21.0 — 连接行改成行内操作、黑边定位到构建 SDK
+
+- **「…」不再是系统 Menu**：`Menu` 飘在独立图层上，从它里面点「切换到这个连接」时
+  连接弹窗立刻出现、菜单还在自己收，两个浮层叠在一起（就是截图里那团错乱），
+  上一版加的 280ms 延时并不能保证。现在改成点「…」在那一行下面展开一条行内操作
+  （切换 / 编辑 / 删除，胶囊按钮），全程没有浮层，也就不可能叠。展开哪一行由
+  `expandedProfileID` 管理，收起路由器列表时一起清掉。
+- **上下黑边 = 构建用的 SDK 太老**（iPhone 17 + iOS 27 实测）：用低于 iOS 26 的 SDK
+  打包，系统不认识这块屏幕，会把 App 按兼容模式运行，内容缩在中间、上下各一条黑边
+  （`UILaunchScreen` 之类都是齐的，问题不在这里）。对策：
+  - workflow 的 `auto` 改成只排 `macos-26`（Xcode 26 / iOS 26 SDK），
+    `macos-15` 只能手动选，且构建前会硬检查 `xcrun --sdk iphoneos --show-sdk-version`，
+    低于 26 直接失败并说明原因；
+  - `ios/build-unsigned-ipa.sh` 同样加了 SDK 检查；
+  - `project.yml` 的 `xcodeVersion` 从 15.4 提到 26.0。
+
 ## v1.20.0 — 标题条形变、连接菜单不再和弹窗打架
 
 - **页面标题改成自己排**（`Glass.swift` 新增 `PageHeader` / `HeaderButton`）：概览 / 网络代理 /
