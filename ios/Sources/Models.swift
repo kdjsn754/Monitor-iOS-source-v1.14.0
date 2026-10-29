@@ -6,9 +6,6 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
     case flash
     case hardware
     case devices
-    case ports
-    case openclash
-    case trend
     case system
 
     var id: String { rawValue }
@@ -20,9 +17,6 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
         case .flash: return "闪存"
         case .hardware: return "硬件状态"
         case .devices: return "连接设备"
-        case .ports: return "网络端口"
-        case .openclash: return "网络代理"
-        case .trend: return "资源趋势"
         case .system: return "系统信息"
         }
     }
@@ -34,9 +28,6 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
         case .flash: return "系统、应用程序与可用空间"
         case .hardware: return "温度和风扇转速"
         case .devices: return "DHCP 租约设备"
-        case .ports: return "LAN 端口和 LAN 桥接"
-        case .openclash: return "OpenClash 状态入口"
-        case .trend: return "最近两分钟 CPU/内存"
         case .system: return "主机、固件、内核与负载"
         }
     }
@@ -48,9 +39,6 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
         case .flash: return "internaldrive"
         case .hardware: return "thermometer.medium"
         case .devices: return "laptopcomputer.and.iphone"
-        case .ports: return "cable.connector"
-        case .openclash: return "shield.lefthalf.filled"
-        case .trend: return "chart.xyaxis.line"
         case .system: return "info.circle"
         }
     }
@@ -77,18 +65,6 @@ struct DeviceInfo: Identifiable {
     var ip: String
     var mac: String
     var name: String
-}
-
-struct PortInfo: Identifiable {
-    let id = UUID()
-    var name: String
-    var state: String
-    var speed: String
-    var duplex: String
-    var rx: UInt64
-    var tx: UInt64
-    var ip: String
-    var bridgePorts: Int
 }
 
 struct OverviewStats {
@@ -141,6 +117,8 @@ struct OpenClashMetrics {
     var memory: UInt64 = 0
     var cpu: Double = 0
     var load: Double = 0
+    /// 最近一次是否真的读到了内核接口（curl/wget 失败或密钥不对时为 false）。
+    var apiReachable = false
 }
 
 struct AccessCheck: Identifiable {
@@ -222,67 +200,60 @@ struct HistoryPoint: Identifiable {
     let upload: Double
 }
 
-// MARK: - 轮询配置
+// MARK: - 页面与采集
 
-/// 数据项挂在哪一档。三档独立计时，同一档里的项会合并成一条命令。
-enum PollTier: String, CaseIterable, Identifiable, Codable {
-    case fast
-    case medium
-    case slow
+/// 轮询跟着页面走：只有当前标签页要用的数据才会被采集。
+enum AppPage: String, CaseIterable, Identifiable {
+    case overview
+    case proxy
+    case settings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .fast: return "快档"
-        case .medium: return "中档"
-        case .slow: return "慢档"
+        case .overview: return "概览"
+        case .proxy: return "网络代理"
+        case .settings: return "设置"
         }
     }
 
-    var shortTitle: String {
+    var icon: String {
         switch self {
-        case .fast: return "快"
-        case .medium: return "中"
-        case .slow: return "慢"
+        case .overview: return "square.grid.2x2"
+        case .proxy: return "globe"
+        case .settings: return "slider.horizontal.3"
         }
     }
 
-    var caption: String {
-        switch self {
-        case .fast: return "界面上的核心数字，越短越跟手，路由器也越忙"
-        case .medium: return "闪存、设备、端口这类变化慢的数据"
-        case .slow: return "OpenClash 状态与连接表，最贵的一组"
+    /// TabView 的下标 ↔ 页面。
+    init(tab: Int) {
+        switch tab {
+        case 1: self = .proxy
+        case 2: self = .settings
+        default: self = .overview
         }
-    }
-
-    /// 秒数允许范围：下限保证路由器有机会喘气，上限防止数据老得没法看。
-    var secondsRange: ClosedRange<Double> {
-        switch self {
-        case .fast: return 1...15
-        case .medium: return 3...120
-        case .slow: return 10...600
-        }
-    }
-
-    /// 加减按钮一次跳多少。
-    var step: Double {
-        self == .slow ? 5 : 1
     }
 }
 
-/// 可以单独决定挂在哪一档的数据项。
+/// 一项可以单独采集的数据。每一项只属于一个页面，只有那一页在前台时才会去取。
 enum PollItem: String, CaseIterable, Identifiable, Codable {
     case core
     case sensors
     case flash
     case devices
-    case ports
     case clashState
     case clashTraffic
     case clashConnections
 
     var id: String { rawValue }
+
+    var page: AppPage {
+        switch self {
+        case .core, .sensors, .flash, .devices: return .overview
+        case .clashState, .clashTraffic, .clashConnections: return .proxy
+        }
+    }
 
     var title: String {
         switch self {
@@ -290,10 +261,9 @@ enum PollItem: String, CaseIterable, Identifiable, Codable {
         case .sensors: return "温度 / 风扇"
         case .flash: return "闪存空间"
         case .devices: return "在线设备"
-        case .ports: return "LAN 端口"
-        case .clashState: return "OpenClash 状态"
-        case .clashTraffic: return "OpenClash 流量"
-        case .clashConnections: return "OpenClash 连接数"
+        case .clashState: return "OpenClash 状态与配置"
+        case .clashTraffic: return "OpenClash 实时流量"
+        case .clashConnections: return "连接数与内核状态"
         }
     }
 
@@ -303,10 +273,9 @@ enum PollItem: String, CaseIterable, Identifiable, Codable {
         case .sensors: return "thermal / hwmon 里的温度与风扇转速"
         case .flash: return "系统、应用程序与可用空间"
         case .devices: return "DHCP 租约里的设备列表"
-        case .ports: return "各网口的速率、双工、IP 与桥接"
-        case .clashState: return "是否运行、模式、配置文件、面板端口"
-        case .clashTraffic: return "实时上下行与内核内存、CPU"
-        case .clashConnections: return "累计流量与连接数（会序列化整张表，最贵）"
+        case .clashState: return "是否运行、代理模式、配置文件、面板端口"
+        case .clashTraffic: return "实时上下行，来自内核 /traffic 接口"
+        case .clashConnections: return "累计流量、连接数、内核内存与 CPU"
         }
     }
 
@@ -316,109 +285,43 @@ enum PollItem: String, CaseIterable, Identifiable, Codable {
         case .sensors: return "thermometer.medium"
         case .flash: return "internaldrive"
         case .devices: return "laptopcomputer.and.iphone"
-        case .ports: return "cable.connector"
         case .clashState: return "shield.lefthalf.filled"
         case .clashTraffic: return "arrow.up.arrow.down"
         case .clashConnections: return "point.3.connected.trianglepath.dotted"
         }
     }
 
-    /// 核心项必须有：没有它整页都是空的，所以固定挂在快档。
-    var isRequired: Bool { self == .core }
-
-    var defaultTier: PollTier? {
-        switch self {
-        case .core: return .fast
-        case .sensors: return .fast
-        case .flash, .devices, .ports, .clashTraffic: return .medium
-        case .clashState, .clashConnections: return .slow
-        }
-    }
+    /// 是否跟着刷新间隔反复采集。
+    /// OpenClash 的模式和配置文件列表要问 7 次 uci，只在进入代理页时取一次，
+    /// 之后每轮只确认运行状态和面板端口，省下的都是路由器的 CPU。
+    var isPeriodic: Bool { self != .clashState }
 }
 
-/// 一键预设。
-enum PollPreset: String, CaseIterable, Identifiable {
-    case saver
-    case balanced
-    case smooth
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .saver: return "省电"
-        case .balanced: return "均衡"
-        case .smooth: return "流畅"
-        }
-    }
-
-    var fast: Double {
-        switch self {
-        case .saver: return 5
-        case .balanced: return 2
-        case .smooth: return 1
-        }
-    }
-
-    var medium: Double {
-        switch self {
-        case .saver: return 30
-        case .balanced: return 10
-        case .smooth: return 5
-        }
-    }
-
-    var slow: Double {
-        switch self {
-        case .saver: return 60
-        case .balanced: return 20
-        case .smooth: return 15
-        }
-    }
-}
-
-/// 存进 UserDefaults 的轮询配置。
+/// 存进 UserDefaults 的采集配置：现在只有一个全局刷新间隔。
 struct PollConfiguration: Codable, Equatable {
-    var fastSeconds: Double = 2
-    var mediumSeconds: Double = 10
-    var slowSeconds: Double = 20
-    /// 数据项 → 档位。键不存在表示沿用默认档位，"off" 表示关闭。
-    var assignments: [String: String] = [:]
+    var seconds: Double = 2
 
-    func tier(for item: PollItem) -> PollTier? {
-        guard let raw = assignments[item.rawValue] else { return item.defaultTier }
-        if raw == "off" { return nil }
-        return PollTier(rawValue: raw)
+    static let range: ClosedRange<Double> = 1...15
+
+    var clampedSeconds: Double {
+        min(max(seconds.rounded(), Self.range.lowerBound), Self.range.upperBound)
     }
 
-    mutating func setTier(_ tier: PollTier?, for item: PollItem) {
-        assignments[item.rawValue] = tier?.rawValue ?? "off"
+    func items(on page: AppPage) -> [PollItem] {
+        PollItem.allCases.filter { $0.page == page }
     }
 
-    func seconds(for tier: PollTier) -> Double {
-        let value: Double
-        switch tier {
-        case .fast: value = fastSeconds
-        case .medium: value = mediumSeconds
-        case .slow: value = slowSeconds
-        }
-        let range = tier.secondsRange
-        return min(max(value, range.lowerBound), range.upperBound)
+    mutating func setSeconds(_ value: Double) {
+        seconds = min(max(value.rounded(), Self.range.lowerBound), Self.range.upperBound)
     }
 
-    mutating func setSeconds(_ value: Double, for tier: PollTier) {
-        let range = tier.secondsRange
-        let clamped = min(max(value.rounded(), range.lowerBound), range.upperBound)
-        switch tier {
-        case .fast: fastSeconds = clamped
-        case .medium: mediumSeconds = clamped
-        case .slow: slowSeconds = clamped
-        }
-    }
+    init() {}
 
-    /// 关掉了多少项，设置页用来提示“关掉就看不到”。
-    var disabledCount: Int {
-        PollItem.allCases.filter { !$0.isRequired && tier(for: $0) == nil }.count
+    /// 老版本的配置里存的是三档秒数，没有 seconds，这里回落默认值。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let value = try container.decodeIfPresent(Double.self, forKey: .seconds) ?? 2
+        seconds = min(max(value.rounded(), Self.range.lowerBound), Self.range.upperBound)
     }
 
     static func load() -> PollConfiguration {

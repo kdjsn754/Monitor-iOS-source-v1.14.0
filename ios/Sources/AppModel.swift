@@ -27,7 +27,7 @@ final class AppModel: ObservableObject {
     @Published var flashInfo = FlashInfo()
     @Published var routerInfo = RouterInfo()
     @Published var devices: [DeviceInfo] = []
-    @Published var ports: [PortInfo] = []
+
     @Published var openClash = OpenClashInfo()
     @Published var ocMetrics = OpenClashMetrics()
     @Published var accessChecks = AccessCheck.Site.allCases.map { AccessCheck(site: $0) }
@@ -39,14 +39,15 @@ final class AppModel: ObservableObject {
     @Published var autoLogin: Bool {
         didSet { UserDefaults.standard.set(autoLogin, forKey: "autoLogin") }
     }
-    /// 轮询配置：三档各自的秒数，以及每个数据项挂在哪一档（或关闭）。
-    /// 改完立即生效：didSet 里重启轮询循环，不用重新连接。
+    /// 采集配置：现在只有一个全局刷新间隔，改完立即生效。
     @Published var pollConfig: PollConfiguration {
         didSet {
             pollConfig.save()
             if connected { startPolling() }
         }
     }
+    /// 当前在看的标签页。采集只跟着它走：切到设置页就完全停下。
+    @Published private(set) var activePage: AppPage = .overview
 
     private let ssh = SSHService()
     private var pollTask: Task<Void, Never>?
@@ -61,8 +62,6 @@ final class AppModel: ObservableObject {
     private var lastOcPid = ""
     private var lastOcTicks: Double?
     private var lastOcTotal: Double?
-    /// 每一档上次执行完成的时刻，用来算下一次该不该跑。
-    private var lastRun: [PollTier: Date] = [:]
 
     init() {
         autoLogin = UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true
@@ -258,7 +257,6 @@ final class AppModel: ObservableObject {
         lastOcPid = ""
         lastOcTicks = nil
         lastOcTotal = nil
-        lastRun.removeAll()
         if !keepPassword, let profile = currentProfile {
             KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
         }
@@ -334,7 +332,6 @@ final class AppModel: ObservableObject {
         stats = OverviewStats()
         routerInfo = RouterInfo()
         devices = []
-        ports = []
         history = []
     }
 
@@ -346,85 +343,53 @@ final class AppModel: ObservableObject {
 
     // MARK: - Polling
     //
-    // 路由器 CPU 往往只有几百 MHz，一次查询里 fork 出来的进程越少越好。
-    // 数据项分三档，各档独立计时；同一档里的项会被拼成**一条**命令、一个 shell 跑完，
-    // 所以项多了只增加脚本长度，不增加进程数。每个项挂哪一档、每档多少秒，
-    // 都能在「设置 → 更新频率 / 数据项」里改。全部脚本以 nice -n 19 执行。
+    // 采集跟着页面走：只有当前标签页要用的数据才会被采集，切到设置页就完全停下，
+    // 路由器不用替一个看不见的界面干活。同一次刷新里的所有项拼成**一条**命令、
+    // 一个 shell 跑完，全部以 nice -n 19 执行，所以进程数不会随项数增加。
 
-    func seconds(for tier: PollTier) -> Double {
-        pollConfig.seconds(for: tier)
+    /// 当前页面要采集的数据项。
+    var activeItems: [PollItem] {
+        pollConfig.items(on: activePage)
     }
 
-    /// 某一档当前要采集的数据项，顺序与设置页一致。
-    func items(in tier: PollTier) -> [PollItem] {
-        PollItem.allCases.filter { pollConfig.tier(for: $0) == tier }
+    /// 当前页面上会反复采集的项（OpenClash 配置只在进页面时取一次）。
+    private var periodicItems: [PollItem] {
+        activeItems.filter(\.isPeriodic)
     }
 
-    /// 设置页顶部的节奏摘要。
-    var pollSummary: String {
-        let fast = Int(seconds(for: .fast).rounded())
-        let medium = Int(seconds(for: .medium).rounded())
-        let slow = Int(seconds(for: .slow).rounded())
-        return "\(fast) / \(medium) / \(slow) 秒"
-    }
+    var pollSeconds: Double { pollConfig.clampedSeconds }
 
-    func setTier(_ tier: PollTier?, for item: PollItem) {
-        guard !item.isRequired else { return }
+    func setPollSeconds(_ value: Double) {
         var config = pollConfig
-        config.setTier(tier, for: item)
+        config.setSeconds(value)
         pollConfig = config
     }
 
-    func setSeconds(_ value: Double, for tier: PollTier) {
-        var config = pollConfig
-        config.setSeconds(value, for: tier)
-        pollConfig = config
+    /// 切换标签页：立刻为这一页取一次数据，然后按新的一组项继续轮询。
+    func setActivePage(_ page: AppPage) {
+        guard page != activePage else { return }
+        activePage = page
+        guard connected else { return }
+        startPolling(refreshNow: true)
     }
 
-    func applyPreset(_ preset: PollPreset) {
-        var config = pollConfig
-        config.fastSeconds = preset.fast
-        config.mediumSeconds = preset.medium
-        config.slowSeconds = preset.slow
-        pollConfig = config
-    }
-
-    /// 恢复默认：所有项回到默认档位，秒数回到 2 / 10 / 20。
-    func resetPollConfig() {
-        var config = PollConfiguration()
-        config.assignments = [:]
-        pollConfig = config
-    }
-
-    private func isDue(_ tier: PollTier) -> Bool {
-        guard !items(in: tier).isEmpty else { return false }
-        guard let last = lastRun[tier] else { return true }
-        return Date().timeIntervalSince(last) >= pollConfig.seconds(for: tier) - 0.05
-    }
-
-    /// 距离下一次该执行还有多久：让循环精确睡到那一刻，不空转也不迟到。
-    private func nextTickDelay() -> TimeInterval {
-        let now = Date()
-        var delay = 60.0
-        for tier in PollTier.allCases {
-            guard !items(in: tier).isEmpty else { continue }
-            guard let last = lastRun[tier] else { return 0.05 }
-            let due = last.addingTimeInterval(pollConfig.seconds(for: tier))
-                .timeIntervalSince(now)
-            delay = min(delay, due)
-        }
-        return max(0.3, delay)
-    }
-
-    private func startPolling() {
+    /// 轮询循环：固定间隔，跑的永远是当前页面的那一组数据。
+    private func startPolling(refreshNow: Bool = false) {
         pollTask?.cancel()
+        pollTask = nil
+        guard !periodicItems.isEmpty else { return }
         pollTask = Task { [weak self] in
             guard let self else { return }
-            while !Task.isCancelled {
-                await self.pollTick()
+            if refreshNow {
+                // 切页后的第一轮把这一页的项全取一次（包括只在进页面时取的那几项）
+                await self.pollTick(includeOnce: true)
                 if Task.isCancelled { return }
-                let delay = self.nextTickDelay()
-                try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
+            }
+            while !Task.isCancelled {
+                let interval = self.pollSeconds
+                try? await Task.sleep(for: .milliseconds(Int(interval * 1000)))
+                if Task.isCancelled { return }
+                await self.pollTick()
             }
         }
     }
@@ -435,80 +400,47 @@ final class AppModel: ObservableObject {
         pollTask = nil
     }
 
-    /// 连接后的首次填充，按“先出数字、再出细节”的顺序发命令：
-    ///   快档 → 静态信息 → 含 OpenClash 状态的那一档 → 剩下的档
-    /// 老版本是 info → 慢档 → 快档，把最贵的一条排在最前面，
-    /// 所以开屏要好几个 SSH 往返之后才看到 CPU 和网速。
+    /// 连接后的首次填充：先取当前页面的数据（界面立刻有数字），再补静态信息。
     private func bootstrapRefresh() async {
-        lastRun.removeAll()
-        for tier in bootstrapOrder() {
-            do {
-                try await runTier(tier)
-                lastRun[tier] = Date()
-            } catch {
-                if tier == .fast {
-                    status = "连接中断"
-                    return
-                }
-            }
-            if tier == .fast {
-                // 型号、固件比端口、闪存便宜，插在快档后面，别让标题一直空着
-                await refreshInfo()
-            }
+        do {
+            try await runItems(activeItems)
+            lastSuccessfulPoll = Date()
+        } catch {
+            status = "连接中断"
+            return
         }
-        lastSuccessfulPoll = Date()
+        await refreshInfo()
     }
 
-    /// 静态信息排在快档之后、其余档之前；含 OpenClash 状态的那一档优先，
-    /// 因为指标档要用它查到的端口和密钥。
-    private func bootstrapOrder() -> [PollTier] {
-        var order: [PollTier] = [.fast]
-        let rest = PollTier.allCases.filter { $0 != .fast }
-        if let stateTier = rest.first(where: { items(in: $0).contains(.clashState) }) {
-            order.append(stateTier)
-        }
-        for tier in rest where !order.contains(tier) { order.append(tier) }
-        return order
-    }
-
-    private func pollTick() async {
+    /// 一轮：把当前页面要采集的项拼成一条命令发出去。
+    /// includeOnce 为真时连「只在进页面时取」的项一起跑（切页后的第一轮）。
+    private func pollTick(includeOnce: Bool = false) async {
         guard connected else { return }
-        for tier in PollTier.allCases {
-            guard isDue(tier) else { continue }
-            do {
-                try await runTier(tier)
-                lastRun[tier] = Date()
-                if tier == .fast {
-                    lastSuccessfulPoll = Date()
-                    status = "已连接"
-                }
-            } catch {
-                if tier == .fast {
-                    status = "连接中断"
-                    if !reconnecting, activePassword != nil {
-                        Task { await self.reconnect(force: false) }
-                    }
-                    return
-                }
-                // 中档、慢档失败不改连接状态，等下一轮再试
+        let items = includeOnce ? activeItems : periodicItems
+        guard !items.isEmpty else { return }
+        do {
+            try await runItems(items)
+            lastSuccessfulPoll = Date()
+            if status != "已连接" { status = "已连接" }
+        } catch {
+            status = "连接中断"
+            if !reconnecting, activePassword != nil {
+                Task { await self.reconnect(force: false) }
             }
         }
     }
 
-    /// 跑一档里的所有项。OpenClash 状态和它的指标必须分成两条命令：
+    /// 跑一组数据项。OpenClash 状态和它的指标必须分成两条命令：
     /// 指标里要用的端口和密钥，来自状态查询的结果。
-    private func runTier(_ tier: PollTier) async throws {
-        let assigned = items(in: tier)
-        guard !assigned.isEmpty else { return }
-        let stateItems = assigned.filter { $0 == .clashState }
-        let otherItems = assigned.filter { $0 != .clashState }
+    private func runItems(_ items: [PollItem]) async throws {
+        guard !items.isEmpty else { return }
+        let stateItems = items.filter { $0 == .clashState }
+        let otherItems = items.filter { $0 != .clashState }
         if !stateItems.isEmpty {
-            let sections = parseSections(try await execute(command(for: stateItems)))
-            apply(sections, items: stateItems)
+            apply(parseSections(try await execute(command(for: stateItems))), items: stateItems)
         }
         if !otherItems.isEmpty {
-            let sections = parseSections(try await execute(command(for: otherItems)))
-            apply(sections, items: otherItems)
+            apply(parseSections(try await execute(command(for: otherItems))), items: otherItems)
         }
     }
 
@@ -519,15 +451,32 @@ final class AppModel: ObservableObject {
         }
         if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "") }
         if items.contains(.devices) { updateDevices(sections["LEASES"] ?? "") }
-        if items.contains(.ports) {
-            updatePorts(ports: sections["PORTS"] ?? "", brif: sections["BRIF"] ?? "")
-        }
         if items.contains(.clashState) {
             openClash = parseOpenClashInfo(sections, current: openClash)
         }
         if items.contains(.clashTraffic) || items.contains(.clashConnections) {
+            applyClashPresence(sections)
             applyMetrics(sections)
         }
+    }
+
+    /// 指标脚本里自带 pidof 和面板端口，所以每轮都能自己确认运行状态，
+    /// 不用等状态档先跑过——旧版这里就是「流量和内核状态一直不更新」的根源。
+    private func applyClashPresence(_ sections: [String: String]) {
+        var info = openClash
+        let state = firstLine(sections["OCSTATE"])
+        if !state.isEmpty {
+            info.installed = ["running", "stopped", "installed"].contains(state)
+            info.running = state == "running"
+        }
+        if let port = Int(firstLine(sections["OCPORT"])), port > 0 {
+            info.panelPort = port
+        }
+        if sections["OCSECRET"] != nil {
+            info.secret = firstLine(sections["OCSECRET"])
+        }
+        info.panelURL = buildPanelURL(info)
+        openClash = info
     }
 
     private func applyCore(_ sections: [String: String]) {
@@ -554,31 +503,50 @@ final class AppModel: ObservableObject {
         appendHistory()
     }
 
-    /// OpenClash 指标：可能只有 /traffic，可能只有 /connections，也可能一起来了。
-    /// 哪一段存在就更新哪一段，缺的部分保持上一次的值。
+    /// OpenClash 指标：/traffic 和 /connections 可能只成功一个，哪段有就更新哪段，
+    /// 缺的部分保持上一次的值，不会因为一次失败就把数字清成 0。
     private func applyMetrics(_ sections: [String: String]) {
         var value = ocMetrics
+        var reachable = false
         if let data = json(sections["TRAFFIC"]),
-           let up = data["up"] as? Double, let down = data["down"] as? Double {
+           let up = number(data["up"]), let down = number(data["down"]) {
             value.upload = up
             value.download = down
+            reachable = true
         }
         if let data = json(sections["CONN"]) {
-            value.uploadTotal = UInt64((data["uploadTotal"] as? Int) ?? 0)
-            value.downloadTotal = UInt64((data["downloadTotal"] as? Int) ?? 0)
-            value.connections = (data["connections"] as? [[String: Any]])?.count ?? 0
+            value.uploadTotal = UInt64(number(data["uploadTotal"]) ?? 0)
+            value.downloadTotal = UInt64(number(data["downloadTotal"]) ?? 0)
+            if let rows = data["connections"] as? [[String: Any]] {
+                value.connections = rows.count
+            }
+            reachable = true
         }
         if let status = sections["OCSTATUS"] {
             let memory = parseVmRSS(status)
             if memory > 0 { value.memory = memory }
         }
         if sections["OCSTAT"] != nil, sections["SYSTAT"] != nil {
-            value.load = currentCoreLoad()
             updateCoreCPU(sections, into: &value)
         }
+        // 负载取 5 分钟均值除以核数，跟指标同一条命令取回来，不额外 fork。
+        let load = firstLine(sections["LOADAVG"])
+            .split(separator: " ")
+            .compactMap { Double($0) }
+        if load.count >= 2 {
+            let cores = max(1, Double(routerInfo.cpuCores > 0 ? routerInfo.cpuCores : 1))
+            value.load = max(0, load[1] / cores * 100)
+        }
+        value.apiReachable = reachable
         ocMetrics = value
     }
 
+    /// JSONSerialization 出来的数字都是 NSNumber，统一走这里取，整数也能取到。
+    private func number(_ any: Any?) -> Double? {
+        if let value = any as? NSNumber { return value.doubleValue }
+        if let value = any as? Double { return value }
+        return nil
+    }
     func refreshInfo() async {
         do {
             let sections = parseSections(try await execute(infoCommand))
@@ -875,32 +843,6 @@ final class AppModel: ObservableObject {
         devices = result
     }
 
-    private func updatePorts(ports portText: String, brif: String) {
-        let bridge = Set(brif
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty })
-        var result: [PortInfo] = []
-        for line in portText.split(separator: "\n") {
-            let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard fields.count >= 9, fields[0] == "P" else { continue }
-            let name = fields[1]
-            let isLan = name == "br-lan" || name.hasPrefix("lan") || bridge.contains(name)
-            guard isLan else { continue }
-            result.append(PortInfo(
-                name: name,
-                state: fields[2],
-                speed: fields[3],
-                duplex: fields[4],
-                rx: UInt64(fields[5]) ?? 0,
-                tx: UInt64(fields[6]) ?? 0,
-                ip: fields[7],
-                bridgePorts: bridge.count
-            ))
-        }
-        self.ports = result
-    }
-
     private func updateCoreCPU(_ sections: [String: String], into value: inout OpenClashMetrics) {
         let pid = firstLine(sections["OCPID"])
         let stat = sections["OCSTAT"] ?? ""
@@ -917,13 +859,6 @@ final class AppModel: ObservableObject {
         }
         lastOcTicks = procTicks
         lastOcTotal = total
-    }
-
-    /// OpenClash 核心的“负载百分比”：直接用上一轮快档拿到的 5 分钟负载
-    /// 和 CPU 核数换算，省掉一次 grep /proc/cpuinfo。
-    private func currentCoreLoad() -> Double {
-        let cores = max(1, Double(routerInfo.cpuCores > 0 ? routerInfo.cpuCores : 1))
-        return max(0, stats.load5 / cores * 100)
     }
 
     private func parseVmRSS(_ status: String) -> UInt64 {
@@ -1110,10 +1045,6 @@ private extension AppModel {
         return "if command -v nice >/dev/null 2>&1; then nice -n 19 sh -c '\(body)'; else sh -c '\(body)'; fi"
     }
 
-    func shellQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// 连接后取一次静态信息。
     /// OpenClash 的运行状态改由 pidof 判断：`/etc/init.d/openclash status`
     /// 在部分固件里会 source 一整套 shell 函数、甚至去列防火墙规则，
@@ -1180,38 +1111,6 @@ private extension AppModel {
             cat /tmp/dhcp.leases 2>/dev/null
 
             """
-        case .ports:
-            return """
-            echo @@BRIF
-            BRN=0
-            for x in /sys/class/net/br-lan/brif/*; do
-              if [ -e "$x" ]; then echo "${x##*/}"; BRN=$((BRN+1)); fi
-            done
-            echo @@PORTS
-            NETTAB=$(awk -F: 'NR>2{gsub(/^[ \\t]+/,"",$2); gsub(/[ \\t]/,"",$1); split($2,a,/[ \\t]+/); printf "%s %s %s ",$1,a[1],a[9]}' /proc/net/dev 2>/dev/null)
-            ADRTAB=$(ip -4 -o addr show 2>/dev/null | awk '{printf "%s %s ",$2,$4}')
-            for d in /sys/class/net/*; do
-              n=${d##*/}
-              [ "$n" = "lo" ] && continue
-              s=""; sp=""; dx=""; rx=0; tx=0; a=""
-              if [ -r "$d/operstate" ]; then read -r s < "$d/operstate"; fi
-              if [ -r "$d/speed" ]; then read -r sp < "$d/speed"; fi
-              if [ -r "$d/duplex" ]; then read -r dx < "$d/duplex"; fi
-              set -- $NETTAB
-              while [ $# -ge 3 ]; do
-                if [ "$1" = "$n" ]; then rx=$2; tx=$3; break; fi
-                shift 3
-              done
-              set -- $ADRTAB
-              while [ $# -ge 2 ]; do
-                if [ "$1" = "$n" ]; then a=$2; break; fi
-                shift 2
-              done
-              printf 'P\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$n" "$s" "$sp" "$dx" "$rx" "$tx" "$a" "$BRN"
-            done
-            true
-
-            """
         case .clashState:
             return """
             echo @@OCSTATE
@@ -1230,56 +1129,75 @@ private extension AppModel {
             true
 
             """
-        case .clashTraffic:
-            return trafficScript
-        case .clashConnections:
-            return connectionsScript
+        case .clashTraffic, .clashConnections:
+            return metricsScript
         }
     }
 
-    /// OpenClash 流量 + 内核内存 / CPU。端口和密钥复用状态档查到的结果。
-    var trafficScript: String {
-        let port = openClash.panelPort > 0 ? openClash.panelPort : 9090
-        let auth = openClash.secret.isEmpty
-            ? ""
-            : "-H \(shellQuoted("Authorization: Bearer \(openClash.secret)")) "
-        return """
-        echo @@TRAFFIC
-        curl -s -f --max-time 3 \(auth)"http://127.0.0.1:\(port)/traffic" 2>/dev/null
-        echo
-
+    /// OpenClash 指标：一条命令里把状态、流量、连接表、内核内存/CPU、负载全取回来。
+    ///
+    /// 端口和密钥在这里自己查，不再依赖“状态档先跑过”。旧版靠状态查询把端口写进
+    /// openClash.panelPort，一旦那条命令失败、或者切页时顺序不对，/traffic 就打在
+    /// 默认 9090 上、或者带着错的密钥返回 4xx，界面就永远停在 0——
+    /// 这正是“实时流量和内核状态不更新”的直接原因。
+    /// 取数做了三层兜底：带密钥 curl → 不带密钥 curl → wget（部分固件只有 wget）。
+    var metricsScript: String {
+        lowPriority("""
+        CURL=$(command -v curl 2>/dev/null)
+        WGET=$(command -v wget 2>/dev/null)
+        PORT=$(uci -q get openclash.config.cn_port 2>/dev/null)
+        [ -n "$PORT" ] || PORT=9090
+        SECRET=$(uci -q get openclash.config.dashboard_password 2>/dev/null)
         set -- $(pidof clash clash_meta clash_tun clash_lite mihomo 2>/dev/null); OCPID=$1
-        echo @@OCPID
-        echo "$OCPID"
+        echo @@OCSTATE
+        if [ -n "$OCPID" ]; then echo running
+        elif [ -d /usr/share/openclash ] || [ -x /etc/init.d/openclash ]; then echo stopped
+        else echo missing; fi
+        echo @@OCPID; echo "$OCPID"
+        echo @@OCPORT; echo "$PORT"
+        echo @@OCSECRET; echo "$SECRET"
+        echo @@TRAFFIC
+        T=""
+        if [ -n "$OCPID" ] && [ -n "$CURL" ]; then
+          if [ -n "$SECRET" ]; then T=$($CURL -s -f -m 3 -H "Authorization: Bearer $SECRET" "http://127.0.0.1:$PORT/traffic" 2>/dev/null); fi
+          [ -n "$T" ] || T=$($CURL -s -f -m 3 "http://127.0.0.1:$PORT/traffic" 2>/dev/null)
+        fi
+        if [ -z "$T" ] && [ -n "$OCPID" ] && [ -n "$WGET" ]; then
+          T=$($WGET -q -O - -T 3 "http://127.0.0.1:$PORT/traffic" 2>/dev/null)
+        fi
+        echo "$T"
+        echo @@CONN
+        C=""
+        if [ -n "$OCPID" ] && [ -n "$CURL" ]; then
+          if [ -n "$SECRET" ]; then C=$($CURL -s -f -m 3 -H "Authorization: Bearer $SECRET" "http://127.0.0.1:$PORT/connections" 2>/dev/null); fi
+          [ -n "$C" ] || C=$($CURL -s -f -m 3 "http://127.0.0.1:$PORT/connections" 2>/dev/null)
+        fi
+        if [ -z "$C" ] && [ -n "$OCPID" ] && [ -n "$WGET" ]; then
+          C=$($WGET -q -O - -T 3 "http://127.0.0.1:$PORT/connections" 2>/dev/null)
+        fi
+        echo "$C"
         echo @@OCSTATUS
         if [ -n "$OCPID" ]; then awk '/^VmRSS|^Threads/' /proc/$OCPID/status 2>/dev/null; fi
         echo @@OCSTAT
         if [ -n "$OCPID" ]; then cat /proc/$OCPID/stat 2>/dev/null; fi
         echo @@SYSTAT
-        head -n 1 /proc/stat 2>/dev/null
+        read -r SY < /proc/stat 2>/dev/null; echo "$SY"
+        echo @@LOADAVG
+        read -r LD < /proc/loadavg 2>/dev/null; echo "$LD"
         true
 
-        """
+        """)
     }
-
-    /// OpenClash 连接表：会让 clash 把整张表序列化一遍，是最贵的一个接口。
-    var connectionsScript: String {
-        let port = openClash.panelPort > 0 ? openClash.panelPort : 9090
-        let auth = openClash.secret.isEmpty
-            ? ""
-            : "-H \(shellQuoted("Authorization: Bearer \(openClash.secret)")) "
-        return """
-        echo @@CONN
-        curl -s -f --max-time 4 \(auth)"http://127.0.0.1:\(port)/connections" 2>/dev/null
-        echo
-
-        """
-    }
-
-    /// 把一档里的项拼成一条命令：同一个 shell 里按顺序跑完，只有一次进程创建。
+    /// 把同一页的项拼成一条命令：同一个 shell 里按顺序跑完，只有一次进程创建。
+    /// 有几项共用一个脚本（比如流量和连接数合成的一条），这里按内容去重，避免重复执行。
     func command(for items: [PollItem]) -> String {
-        let body = items.map { script(for: $0) }.joined(separator: "\n")
-        return lowPriority(body)
+        var seen = Set<String>()
+        var parts: [String] = []
+        for item in items {
+            let body = script(for: item)
+            if seen.insert(body).inserted { parts.append(body) }
+        }
+        return lowPriority(parts.joined(separator: "\n"))
     }
 
     var accessCommand: String {

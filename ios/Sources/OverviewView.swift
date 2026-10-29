@@ -3,7 +3,6 @@ import Charts
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var selectedTab: Int
 
     var body: some View {
         NavigationStack {
@@ -73,36 +72,6 @@ struct OverviewView: View {
             moduleCard(module) { hardwareContent }
         case .devices:
             moduleCard(module) { devicesContent }
-        case .ports:
-            moduleCard(module) { portsContent }
-        case .openclash:
-            Button {
-                selectedTab = 1
-            } label: {
-                moduleCard(module) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(model.openClash.installed
-                                 ? (model.openClash.running ? "运行中" : "已停止")
-                                 : "未安装")
-                                .font(.subheadline.weight(.semibold))
-                            Text("查看状态、模式与配置文件")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(model.openClash.mode.uppercased())
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-        case .trend:
-            moduleCard(module) { trendContent }
         case .system:
             moduleCard(module) { systemContent }
         }
@@ -324,78 +293,6 @@ struct OverviewView: View {
         }
     }
 
-    private var portsContent: some View {
-        VStack(spacing: 8) {
-            if model.ports.isEmpty {
-                Text("未发现 LAN 端口").font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(model.ports) { port in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Circle()
-                                .fill(port.state == "up" ? .green : .gray)
-                                .frame(width: 6, height: 6)
-                            Text(port.name)
-                                .font(.caption.weight(.medium))
-                            Text(port.speed.isEmpty ? "--" : "\(port.speed) Mb/s")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(port.ip.isEmpty ? "--" : port.ip)
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        HStack {
-                            Text("↓ \(formatBytes(Double(port.rx)))")
-                            Text("↑ \(formatBytes(Double(port.tx)))")
-                            if !port.duplex.isEmpty {
-                                Text(port.duplex)
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private var trendContent: some View {
-        let latest = model.history.last
-        let memory = latest?.memory ?? (model.memoryFraction * 100)
-        return VStack(alignment: .leading, spacing: 6) {
-            if model.history.count > 1 {
-                Chart(model.history) { point in
-                    LineMark(
-                        x: .value("时间", point.date),
-                        y: .value("CPU", point.cpu),
-                        series: .value("指标", "CPU")
-                    )
-                    .foregroundStyle(.orange)
-
-                    LineMark(
-                        x: .value("时间", point.date),
-                        y: .value("内存", point.memory),
-                        series: .value("指标", "内存")
-                    )
-                    .foregroundStyle(.blue)
-                }
-                .chartYScale(domain: 0...100)
-                .chartXAxis(.hidden)
-                .frame(height: 90)
-            } else {
-                Text("正在采集…").font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 14) {
-                Label(String(format: "CPU %.0f%%", latest?.cpu ?? 0), systemImage: "circle.fill")
-                    .foregroundStyle(.orange)
-                Label(String(format: "内存 %.0f%%", memory), systemImage: "circle.fill")
-                    .foregroundStyle(.blue)
-            }
-            .font(.caption2)
-        }
-    }
-
     private var systemContent: some View {
         VStack(spacing: 0) {
             InfoRow(label: "主机名", value: model.routerInfo.hostname.isEmpty ? "--" : model.routerInfo.hostname)
@@ -411,9 +308,6 @@ struct OverviewView: View {
             InfoRow(label: "运行时间", value: formatUptime(model.stats.uptime))
             Divider()
             InfoRow(label: "负载", value: String(format: "%.2f", model.stats.load))
-            Divider()
-            InfoRow(label: "OpenClash", value: model.openClash.running ? "运行中" : "已停止",
-                    color: model.openClash.running ? .green : .secondary)
         }
     }
 }

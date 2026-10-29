@@ -34,8 +34,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.catmint.openwrtmonitor
-        MARKETING_VERSION: 1.16.0
-        CURRENT_PROJECT_VERSION: 29
+        MARKETING_VERSION: 1.17.0
+        CURRENT_PROJECT_VERSION: 30
         SWIFT_VERSION: 5.9
         IPHONEOS_DEPLOYMENT_TARGET: 17.0
         CODE_SIGN_STYLE: Manual

@@ -142,11 +142,12 @@ struct RootView: View {
 }
 
 struct MainTabs: View {
+    @EnvironmentObject private var model: AppModel
     @State private var selection = 0
 
     var body: some View {
         TabView(selection: $selection) {
-            OverviewView(selectedTab: $selection)
+            OverviewView()
                 .tabItem { Label("概览", systemImage: "square.grid.2x2") }
                 .tag(0)
             ProxyView()
@@ -155,6 +156,13 @@ struct MainTabs: View {
             SettingsView()
                 .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
                 .tag(2)
+        }
+        // 采集跟着页面走：切到哪一页就只采那一页要用的数据，设置页完全不采。
+        .onChange(of: selection) { _, value in
+            model.setActivePage(AppPage(tab: value))
+        }
+        .onAppear {
+            model.setActivePage(AppPage(tab: selection))
         }
     }
 }

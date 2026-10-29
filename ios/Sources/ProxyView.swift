@@ -206,6 +206,15 @@ struct ProxyView: View {
                     Spacer(minLength: 4)
                     totalBlock("上传", formatBytes(Double(metrics.uploadTotal)))
                 }
+
+                if oc.running, !metrics.apiReachable {
+                    Label("读不到内核接口：端口 \(oc.panelPort) 无响应，或控制面板密码不一致。数字会停在上一次的值。",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }

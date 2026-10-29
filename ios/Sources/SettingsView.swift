@@ -317,94 +317,59 @@ struct SettingsView: View {
 
     // MARK: - 采集与刷新（摘要，细则进二级页）
 
-    private var enabledCount: Int {
-        PollItem.allCases.filter { model.pollConfig.tier(for: $0) != nil }.count
-    }
-
-    private var pollingDetail: String {
-        let total = PollItem.allCases.count
-        let off = model.pollConfig.disabledCount
-        if off > 0 {
-            return "\(total) 项数据 · 已开启 \(enabledCount) 项"
-        }
-        return "\(total) 项数据全部开启"
-    }
-
     private var pollingCard: some View {
         SectionCard("采集与刷新", icon: "clock.arrow.circlepath") {
-            VStack(spacing: 12) {
-                NavigationLink {
-                    PollSettingsView()
-                } label: {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 8) {
-                            ForEach(PollTier.allCases) { tier in
-                                tierTile(tier)
-                            }
-                        }
+            NavigationLink {
+                PollSettingsView()
+            } label: {
+                VStack(spacing: 8) {
+                    HStack(spacing: 10) {
+                        Text("每 \(Int(model.pollSeconds.rounded())) 秒")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text("\(PollItem.allCases.count) 项数据，只采当前页面")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
 
-                        HStack(spacing: 6) {
-                            Text(pollingDetail)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 4)
-                            Text("详细设置")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                    HStack(spacing: 6) {
+                        ForEach(AppPage.allCases) { page in
+                            pageChip(page)
                         }
                     }
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-
-                HStack(spacing: 8) {
-                    Text("预设")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    ForEach(PollPreset.allCases) { preset in
-                        Button(preset.title) {
-                            model.applyPreset(preset)
-                        }
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 5)
-                        .background(Color(.tertiarySystemFill), in: Capsule())
-                        .foregroundStyle(.primary)
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                if model.items(in: .fast).count > 3 {
-                    Text("快档挂了 \(model.items(in: .fast).count) 项，路由器性能一般的话建议把一部分挪到中档。")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
     }
 
-    private func tierTile(_ tier: PollTier) -> some View {
-        VStack(spacing: 3) {
-            Text(tier.title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("\(Int(model.seconds(for: tier).rounded())) 秒")
-                .font(.subheadline.weight(.semibold))
-                .monospacedDigit()
-            Text("\(model.items(in: tier).count) 项")
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
+    /// 一眼看出「哪一页采哪些数据」，比之前三档的格子干净得多。
+    private func pageChip(_ page: AppPage) -> some View {
+        let count = model.pollConfig.items(on: page).count
+        let active = page == model.activePage && count > 0
+        return HStack(spacing: 4) {
+            Image(systemName: page.icon)
+                .font(.system(size: 9, weight: .semibold))
+            Text(count > 0 ? "\(page.title) \(count) 项" : "\(page.title) 不采集")
+                .font(.system(size: 10))
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            active ? Color.blue.opacity(0.14) : Color(.tertiarySystemFill),
+            in: Capsule()
+        )
+        .foregroundStyle(active ? Color.blue : Color.secondary)
     }
 
     // MARK: - 关于
@@ -412,11 +377,9 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 9) {
-                infoRow("版本", "1.16.0")
+                infoRow("版本", "1.17.0")
                 infoRow("连接方式", "SSH 直连")
-                infoRow("OpenClash", model.openClash.installed
-                        ? (model.openClash.running ? "运行中" : "已停止")
-                        : "未检测到")
+                infoRow("采集范围", "只采当前页面要用的数据")
                 infoRow("数据去向", "只在本机与路由器之间")
             }
         }
