@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 设置页：顶部一张「路由器」卡把连接、切换、编辑全收进去，
+/// 设置页：顶部一张「路由器」卡把当前连接、切换、新建、编辑、网页后台全收进去，
 /// 采集频率只留一行摘要，细项进二级页。
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
@@ -8,19 +8,33 @@ struct SettingsView: View {
     @State private var confirmLogout = false
     @State private var editorRoute: ConnectionEditorRoute?
     @State private var showRouterWeb = false
-    /// 哪一行的「…」是展开状态。行内操作条，不再是系统菜单浮层。
-    @State private var expandedProfileID: UUID?
-    /// 等待确认删除的连接。
-    @State private var pendingDelete: RouterProfile?
-    @State private var confirmDelete = false
+    /// 切换连接的半屏选择器（自绘，不再用系统的列表/菜单）。
+    @State private var showSwitcher = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    PageHeader("设置")
+                    PageHeader("设置") {
+                        // 以前「重新连接」是路由器卡里的一个胶囊按钮，
+                        // 新版式跟参考图一样只留三个动作，就把它收到页头，
+                        // 和概览、网络代理两页的刷新按钮位置一致。
+                        HeaderButton("arrow.clockwise") {
+                            Task { await model.manualRefresh() }
+                        }
+                    }
                     routerCard
-                    connectionsCard
+                        // 三个 sheet 挂在同一个视图上容易互相抢，网页后台这张挂到卡片上。
+                        .sheet(isPresented: $showRouterWeb) {
+                            if let url = model.routerWebURL {
+                                PanelView(
+                                    url: url,
+                                    title: "路由器网页后台",
+                                    autoLoginUser: model.currentProfile?.user,
+                                    autoLoginPassword: model.currentPassword
+                                )
+                            }
+                        }
                     appearanceCard
                     pollingCard
                     aboutCard
@@ -37,15 +51,9 @@ struct SettingsView: View {
                 ConnectionEditorView(profile: route.profile)
                     .id(route.id)
             }
-            .sheet(isPresented: $showRouterWeb) {
-                if let url = model.routerWebURL {
-                    PanelView(
-                        url: url,
-                        title: "路由器网页后台",
-                        autoLoginUser: model.currentProfile?.user,
-                        autoLoginPassword: model.currentPassword
-                    )
-                }
+            .sheet(isPresented: $showSwitcher) {
+                RouterSwitcherSheet()
+                    .environmentObject(model)
             }
             .confirmationDialog("退出后需要重新输入密码", isPresented: $confirmLogout, titleVisibility: .visible) {
                 Button("断开并清除密码", role: .destructive) {
@@ -56,296 +64,185 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - 路由器（连接 + 切换 + 编辑，全在这一张卡里）
+    // MARK: - 路由器（当前连接 + 三个动作 + 网页后台）
 
+    /// 参照「图标 + 大标题 + 地址」的卡片版式重排：
+    /// 上半部分是当前这台路由器是谁，下面一排三个等宽方块按钮，最后是一条整宽主按钮。
     private var routerCard: some View {
-        SectionCard("路由器", icon: "wifi.router.fill") {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                // 状态不再占标题的宽度：参考图里标题是整行铺开的，
+                // 右上角再挂一个「已连接」胶囊会把名字和地址挤成省略号。
+                // 改成图标右下角一枚小圆点，颜色即状态。
+                ZStack(alignment: .bottomTrailing) {
                     ZStack {
-                        Circle()
-                            .fill(Color.blue.opacity(0.12))
-                            .frame(width: 46, height: 46)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.blue.opacity(0.10))
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.blue.opacity(0.22), lineWidth: 1)
                         Image(systemName: "wifi.router.fill")
-                            .font(.system(size: 19))
+                            .font(.system(size: 24, weight: .medium))
                             .foregroundStyle(.blue)
                     }
+                    .frame(width: 58, height: 58)
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(model.currentProfile?.title ?? "还没有连接")
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(model.currentProfile?.subtitle
-                             ?? "在下面「已保存连接」里添加一台路由器")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 6)
-                    statusPill
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 13, height: 13)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color(.secondarySystemGroupedBackground),
+                                              lineWidth: 2.5)
+                        }
+                        .offset(x: 2, y: 2)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("路由器，\(statusLabel)")
 
-                HStack(spacing: 8) {
-                    chip("重新连接", icon: "arrow.clockwise") {
-                        Task { await model.manualRefresh() }
-                    }
-                    chip("网页后台", icon: "safari") { showRouterWeb = true }
-                    chip("编辑", icon: "pencil") {
-                        openEditor(model.currentProfile ?? model.profiles.first)
-                    }
-                }
-
-                // 错误提示：8 秒自动消失，也能点叉立刻收掉。
-                // 以前只在「下一次连接成功」时才清，连不上的红字会一直挂在设置页上，
-                // 除非退出 App 重进——这就是截图里那行一直不走的报错。
-                if let error = model.errorMessage {
-                    ErrorBanner(text: error) { model.clearError() }
-                }
-            }
-        }
-    }
-
-    // MARK: - 已保存连接（整块重做）
-
-    private var connectionsCard: some View {
-        SectionCard("已保存连接", icon: "list.bullet.rectangle") {
-            VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    Text(model.profiles.isEmpty
-                         ? "还没有保存过连接"
-                         : "\(model.profiles.count) 个连接，点名称即可切换")
-                        .font(.caption)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(routerTitle)
+                        .font(.system(size: 20, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text(routerSubtitle)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-
-                    Spacer(minLength: 6)
-
-                    Button {
-                        expandedProfileID = nil
-                        openEditor(nil)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("新建")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.12), in: Capsule())
-                        .foregroundStyle(Color.blue)
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+                        .minimumScaleFactor(0.8)
+                        .truncationMode(.middle)
                 }
 
-                if model.profiles.isEmpty {
-                    Text("点右上角「新建」填地址和密码，连接成功后会自动存一条。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(model.profiles.enumerated()), id: \.element.id) { index, profile in
-                            if index > 0 {
-                                Divider().opacity(0.5).padding(.leading, 46)
-                            }
-                            connectionRow(profile)
-                        }
-                    }
+                Spacer(minLength: 0)
+            }
+
+            Divider().opacity(0.5)
+
+            HStack(spacing: 9) {
+                actionTile("切换连接", icon: "arrow.left.arrow.right",
+                           enabled: !model.profiles.isEmpty) {
+                    showSwitcher = true
                 }
-
-                Divider().opacity(0.5)
-
-                HStack(spacing: 10) {
-                    Image(systemName: "key.fill")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("自动登录")
-                            .font(.subheadline)
-                        Text(model.autoLogin
-                             ? "启动 App 时自动连当前这个连接"
-                             : "启动 App 后停在登录页，手动连接")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
-                    Spacer(minLength: 6)
-                    Toggle("", isOn: Binding(
-                        get: { model.autoLogin },
-                        set: { model.autoLogin = $0 }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                actionTile("新建连接", icon: "plus", highlighted: true) {
+                    openEditor(nil)
+                }
+                actionTile("编辑当前连接", icon: "pencil",
+                           enabled: model.currentProfile != nil) {
+                    openEditor(model.currentProfile ?? model.profiles.first)
                 }
             }
-        }
-        .confirmationDialog(
-            pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
-            isPresented: $confirmDelete,
-            titleVisibility: .visible,
-            presenting: pendingDelete
-        ) { profile in
-            Button("删除连接", role: .destructive) {
-                model.deleteProfile(profile)
-                expandedProfileID = nil
-                pendingDelete = nil
-            }
-            Button("取消", role: .cancel) { pendingDelete = nil }
-        } message: { profile in
-            Text(profile.id == model.currentProfileID
-                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
-                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
-        }
-    }
 
-    /// 一行连接：左边点一下切换，右边「…」展开编辑 / 删除。
-    private func connectionRow(_ profile: RouterProfile) -> some View {
-        let isCurrent = profile.id == model.currentProfileID
-        let expanded = expandedProfileID == profile.id
-        let isConnecting = model.connecting
-            && model.attemptTarget?.profile.id == profile.id
-
-        return VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Button {
-                    guard !isCurrent else { return }
-                    expandedProfileID = nil
-                    Task { await model.switchTo(profile) }
-                } label: {
-                    HStack(spacing: 10) {
-                        ZStack {
-                            Circle()
-                                .fill(isCurrent ? Color.blue.opacity(0.14) : Color(.tertiarySystemFill))
-                                .frame(width: 34, height: 34)
-                            Image(systemName: isCurrent ? "wifi.router.fill" : "wifi.router")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(isCurrent ? Color.blue : Color.secondary)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(profile.title)
-                                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Text(profile.subtitle)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 4)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isCurrent)
-
-                if isConnecting {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else if isCurrent {
-                    Text("当前")
-                        .font(.system(size: 10, weight: .semibold))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color.green.opacity(0.14), in: Capsule())
-                        .foregroundStyle(.green)
-                }
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        expandedProfileID = expanded ? nil : profile.id
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(expanded ? Color.blue : Color.secondary)
-                        .frame(width: 28, height: 28)
-                        .background(
-                            expanded ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill),
-                            in: Circle()
-                        )
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.vertical, 9)
-
-            if expanded {
+            Button {
+                showRouterWeb = true
+            } label: {
                 HStack(spacing: 8) {
-                    rowAction("编辑", icon: "pencil", tint: .blue) {
-                        expandedProfileID = nil
-                        openEditor(profile)
-                    }
-                    rowAction("删除", icon: "trash", tint: .red) {
-                        pendingDelete = profile
-                        confirmDelete = true
-                    }
+                    Image(systemName: "globe")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("打开路由器网页后台")
+                        .font(.system(size: 16, weight: .semibold))
                 }
-                .padding(.leading, 44)
-                .padding(.bottom, 10)
-                .transition(.opacity)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(
+                    canOpenWeb ? Color.blue : Color(.systemGray4),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .foregroundStyle(canOpenWeb ? Color.white : Color(.systemGray))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpenWeb)
+
+            autoLoginRow
+
+            // 错误提示：8 秒自动消失，也能点叉立刻收掉。
+            // 以前只在「下一次连接成功」时才清，连不上的红字会一直挂在设置页上，
+            // 除非退出 App 重进——这就是截图里那行一直不走的报错。
+            if let error = model.errorMessage {
+                ErrorBanner(text: error) { model.clearError() }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
     }
 
-    private func rowAction(_ title: String, icon: String, tint: Color,
-                           action: @escaping () -> Void) -> some View {
+    private var canOpenWeb: Bool {
+        model.routerWebURL != nil
+    }
+
+    private var routerTitle: String {
+        model.currentProfile?.title ?? "还没有连接"
+    }
+
+    /// 参考图那行：`root@192.168.8.1:22 · 网页 :8080`。
+    private var routerSubtitle: String {
+        guard let profile = model.currentProfile else {
+            return "点「新建连接」填地址和密码"
+        }
+        return "\(profile.user)@\(profile.host):\(profile.port) · 网页 :\(profile.webPortValue)"
+    }
+
+    /// 三个等宽方块按钮：图标在上、文字在下。中间那个是主行动，蓝色描边。
+    private func actionTile(_ title: String, icon: String,
+                            highlighted: Bool = false,
+                            enabled: Bool = true,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            VStack(spacing: 7) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                 Text(title)
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 12, weight: highlighted ? .semibold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .lineLimit(1)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(tint.opacity(0.10), in: Capsule())
-            .foregroundStyle(tint)
-            .contentShape(Capsule())
+            .padding(.vertical, 13)
+            .foregroundStyle(highlighted ? Color.blue : Color.primary)
+            .background(
+                (highlighted ? Color.blue.opacity(0.08) : Color(.tertiarySystemFill)),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        highlighted ? Color.blue.opacity(0.45) : Color.clear,
+                        lineWidth: 1
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 5) {
-            Circle()
-                // 正在连新连接时旧会话还在，别让胶囊显示「已连接」骗人。
-                .fill(model.connecting ? Color.blue : (model.connected ? Color.green : Color.orange))
-                .frame(width: 6, height: 6)
-            Text(model.connecting ? "正在连接…" : (model.connected ? "已连接" : model.status))
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+    private var autoLoginRow: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 18)
+            Text("启动时自动连接")
+                .font(.footnote)
+            Spacer(minLength: 6)
+            Toggle("", isOn: Binding(
+                get: { model.autoLogin },
+                set: { model.autoLogin = $0 }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
-    private func chip(_ title: String, icon: String,
-                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.caption2.weight(.semibold))
-                Text(title)
-                    .font(.caption.weight(.medium))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(Color(.tertiarySystemFill), in: Capsule())
-            .foregroundStyle(.primary)
-        }
-        .buttonStyle(.plain)
+    /// 图标角标：正在连新连接时旧会话还在，别让绿点骗人。
+    private var statusColor: Color {
+        if model.connecting { return .blue }
+        return model.connected ? .green : .orange
+    }
+
+    private var statusLabel: String {
+        if model.connecting { return "正在连接" }
+        return model.connected ? "已连接" : model.status
     }
 
     private func openEditor(_ profile: RouterProfile?) {
@@ -482,7 +379,7 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 10) {
-                infoRow("版本", "1.23.0")
+                infoRow("版本", "1.24.0")
                 Divider().opacity(0.5)
                 infoRow("连接方式", "SSH 直连")
             }
@@ -553,6 +450,169 @@ struct SectionCard<Content: View>: View {
             content
         }
         .glassCard()
+    }
+}
+
+// MARK: - 切换连接
+
+/// 原来的「已保存连接」卡片整块搬到这里：点一行就切换，右侧垃圾桶删掉。
+/// 设置页本身只留三个动作按钮，不再被一条连接列表撑长；
+/// 面板是和配置选择器同一套自绘样式，不用系统的列表/菜单。
+private struct RouterSwitcherSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var pendingDelete: RouterProfile?
+    @State private var confirmDelete = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            if model.profiles.isEmpty {
+                Text("还没有保存过连接，先在设置页点「新建连接」。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+            } else {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(model.profiles) { profile in
+                            row(profile)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 20)
+                }
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .confirmationDialog(
+            pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { profile in
+            Button("删除连接", role: .destructive) {
+                model.deleteProfile(profile)
+                pendingDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: { profile in
+            Text(profile.id == model.currentProfileID
+                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
+                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("切换连接")
+                    .font(.headline)
+                Text("共 \(model.profiles.count) 个，点一下即切换")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+    }
+
+    private func row(_ profile: RouterProfile) -> some View {
+        let isCurrent = profile.id == model.currentProfileID
+        let isConnecting = model.connecting
+            && model.attemptTarget?.profile.id == profile.id
+
+        return HStack(spacing: 8) {
+            Button {
+                guard !isCurrent, !isConnecting else { return }
+                // 先收起面板，让连接弹窗能盖在最上面。
+                dismiss()
+                Task { await model.switchTo(profile) }
+            } label: {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(isCurrent ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: isCurrent ? "wifi.router.fill" : "wifi.router")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(isCurrent ? Color.blue : Color.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(profile.title)
+                                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            if isCurrent {
+                                Text("当前")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.14), in: Capsule())
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        Text(profile.subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    if isConnecting {
+                        ProgressView().controlSize(.mini)
+                    } else if !isCurrent {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isCurrent || isConnecting)
+
+            Button {
+                pendingDelete = profile
+                confirmDelete = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .frame(width: 32, height: 32)
+                    .background(Color.red.opacity(0.09), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("删除 \(profile.title)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 }
 

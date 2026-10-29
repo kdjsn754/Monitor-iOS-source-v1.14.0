@@ -199,10 +199,15 @@ struct ProxyView: View {
 
                 Divider().opacity(0.5)
 
-                HStack(spacing: 8) {
-                    totalBlock("本次累计下载", formatBytes(Double(metrics.downloadTotal)))
-                    Spacer(minLength: 4)
-                    totalBlock("上传", formatBytes(Double(metrics.uploadTotal)))
+                // 以前是「标签 12pt + 数值 12pt」挤在一行，跟上面的实时速率一比
+                // 明显像脚注。改成两块同高的累计格：图标 + 小标签 + 17pt 数值。
+                HStack(spacing: 10) {
+                    totalTile("本次累计下载",
+                              value: formatBytes(Double(metrics.downloadTotal)),
+                              icon: "arrow.down.circle.fill", color: .blue)
+                    totalTile("本次累计上传",
+                              value: formatBytes(Double(metrics.uploadTotal)),
+                              icon: "arrow.up.circle.fill", color: .purple)
                 }
 
                 if oc.running, !metrics.apiReachable {
@@ -232,15 +237,35 @@ struct ProxyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func totalBlock(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 5) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
+    /// 累计流量格：左边一枚彩色箭头，右边「小标签 + 大数值」。
+    private func totalTile(_ label: String, value: String,
+                           icon: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(color)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(value)
+                    .font(.system(size: 17, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - 内核
@@ -350,14 +375,6 @@ struct ProxyView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(oc.configs.isEmpty || model.busy)
-
-                Text(oc.configs.isEmpty
-                     ? "把 .yaml 配置放进路由器的 /etc/openclash/config 目录，这里就会列出来。"
-                     : "切换会重启 OpenClash 内核，已建立的连接会短暂中断。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -380,11 +397,11 @@ struct ProxyView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.blue.opacity(0.12))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                     Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.blue)
                 }
 
@@ -431,12 +448,6 @@ struct ProxyView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canOpenPanel)
-
-            Text(panelHint)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
@@ -450,13 +461,6 @@ struct ProxyView: View {
         guard let host = model.currentProfile?.host else { return "未获取到地址" }
         let base = "\(host):\(oc.panelPort)"
         return oc.dashboard.isEmpty ? base : "\(base) · \(oc.dashboard)"
-    }
-
-    private var panelHint: String {
-        if !oc.installed { return "没有检测到 OpenClash，装好插件后这里会自动出现面板地址。" }
-        if !oc.running { return "OpenClash 已停止，启动之后才能打开控制面板。" }
-        if oc.panelURL == nil { return "还没读到面板端口，等一轮采集（约 2 秒）再试。" }
-        return "面板会带上当前门户密码直接登录，不需要再输一次。"
     }
 
     // MARK: - 访问检查
@@ -510,11 +514,6 @@ struct ProxyView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isChecking || model.busy)
-
-                Text("进入网络代理页、拿到状态后会自动检测一次。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -538,51 +537,64 @@ struct ProxyView: View {
         return formatter
     }()
 
-    /// 一个站点一格：名称 + 状态点 + 延迟 + 一条相对延迟条。
+    /// 一个站点一格：右上角一枚小圆点，颜色就是延迟档位；下面是保留的延迟数值。
     ///
-    /// 以前每格下面挂一条 22pt 的走势线（Swift Charts）。四个小图并排，
-    /// 既看不出趋势（一格才 10 个点、轴全隐藏），又是整页最贵的一次重绘。
-    /// 现在换成一条 3pt 的延迟条：一眼看出「快 / 慢 / 挂」，也顺带让四格高度一致。
+    /// 圆点以前只有「通 = 绿 / 不通 = 红」两档，延迟条又只有 3pt 高、看不出快慢。
+    /// 现在把档位直接搬到圆点上（绿 ≤150 / 蓝 ≤400 / 橙 ≤800 / 红更慢或超时），
+    /// 数值放大到 17pt 圆体，四格更矮更整齐，也不用再多画一条进度条。
     private func accessTile(_ check: AccessCheck) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
                 Text(check.site.title)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Spacer(minLength: 0)
-                Circle()
-                    .fill(dotColor(check))
-                    .frame(width: 6, height: 6)
+                statusDot(check)
             }
 
             Text(latencyText(check))
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(latencyColor(check))
-
-            LatencyBar(fraction: latencyFraction(check), color: barColor(check))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
         .background(Color(.tertiarySystemFill),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    /// 延迟条的长度：500ms 打满。没测过是 0，超时直接满格标红。
-    private func latencyFraction(_ check: AccessCheck) -> Double {
-        guard check.tested else { return 0 }
-        guard check.success else { return 1 }
-        return min(1, max(0.04, Double(check.latency) / 500))
+    /// 小圆点：里面实心 8pt，外面一层同色淡光晕，颜色即延迟档位。
+    private func statusDot(_ check: AccessCheck) -> some View {
+        let color = dotColor(check)
+        return ZStack {
+            Circle()
+                .fill(color.opacity(0.18))
+                .frame(width: 16, height: 16)
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+        .accessibilityLabel(dotLabel(check))
     }
 
-    /// 150ms 内绿、400ms 内蓝、再慢转橙，超时红——比「一条走势线」直观得多。
-    private func barColor(_ check: AccessCheck) -> Color {
+    /// 绿 ≤150ms、蓝 ≤400ms、橙 ≤800ms、红 >800ms 或超时；没测过是灰的。
+    private func dotColor(_ check: AccessCheck) -> Color {
         guard check.tested else { return Color(.systemGray3) }
         guard check.success else { return .red }
         if check.latency <= 150 { return .green }
         if check.latency <= 400 { return .blue }
-        return .orange
+        if check.latency <= 800 { return .orange }
+        return .red
+    }
+
+    private func dotLabel(_ check: AccessCheck) -> String {
+        guard check.tested else { return "还没有检测" }
+        return check.success ? "延迟 \(check.latency) 毫秒" : "超时"
     }
 
     private func latencyText(_ check: AccessCheck) -> String {
@@ -593,30 +605,6 @@ struct ProxyView: View {
     private func latencyColor(_ check: AccessCheck) -> Color {
         guard check.tested else { return .secondary }
         return check.success ? Color.primary : Color.red
-    }
-
-    private func dotColor(_ check: AccessCheck) -> Color {
-        guard check.tested else { return Color(.tertiaryLabel) }
-        return check.success ? .green : .red
-    }
-}
-
-/// 3pt 的延迟条：轨道 + 填充，长度就是延迟占 500ms 的比例。
-private struct LatencyBar: View {
-    let fraction: Double
-    let color: Color
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color(.systemGray5))
-                Capsule()
-                    .fill(color.opacity(0.9))
-                    .frame(width: max(0, min(1, fraction)) * proxy.size.width)
-            }
-        }
-        .frame(height: 3)
-        .accessibilityHidden(true)
     }
 }
 
