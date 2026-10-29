@@ -2,6 +2,51 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.15.0 — 开屏更快、设置页重做、更新频率可自定义
+
+- **开屏不再空等**。原来连接后按 info → 慢档 → 快档 的顺序发命令，最贵的一条排在最前面，
+  所以要先等 OpenClash 的 uci 查询和端口扫描，才看到 CPU 和网速。
+  现在改成 快档 → 静态信息 → OpenClash 状态 → 其余档：SSH 握手完成后再过一条命令
+  （约一个往返）界面就有数字，型号/固件随后补上。
+  `infoCommand` 也瘦身了：去掉与快档重复的 uptime/loadavg/route，以及整个 OpenClash 段。
+- **设置页重做**：从 Form 长列表改成卡片流——顶部一张连接卡（状态、重新连接、网页后台、编辑），
+  下面是外观、更新频率、数据项、路由器、关于，每块一张卡，和概览页同一套 `glassCard` 风格。
+- **更新频率可自定义**：
+  - 三档秒数自己调（快档 1–15、中档 3–120、慢档 10–600），右侧 ± 按钮直接改，改完立刻生效。
+  - 每个数据项都能选挂在哪一档，或者关掉：CPU/内存/网速（固定快档）、温度风扇、闪存、
+    在线设备、LAN 端口、OpenClash 状态、OpenClash 流量、OpenClash 连接数。
+  - 一键预设：省电（5 / 30 / 60）、均衡（2 / 10 / 20）、流畅（1 / 5 / 15）。
+  - 同一档里的项仍然合并成**一条**命令、一个 shell 执行，所以把项挪到慢档只改变频率，
+    不会多 fork 进程。
+
+## v1.14.4 — 修掉 GitHub Actions 一直排队（App 代码未改）
+
+- 仓库是公开的，所以与额度、付款方式无关：**真正原因是 `macos-14` 正在退役**。
+  GitHub 于 2026-10-01 公告：`macos-14` / `macos-14-large` / `macos-14-xlarge`
+  在 **2026-11-02 退役**，过渡期先削减容量，还在 10/5–10/31 之间排了 8 个
+  brownout 窗口（14:00–次日 00:00 UTC，10/29、10/30 两段连着）。
+  仍用 `macos-14` 的作业就会一直停在 `Waiting for a runner` 直到超时。
+- workflow 改为默认 `auto`：同时向 `macos-15` 与 `macos-26` 两个池子提交，
+  谁先分到机器谁先出包（公开仓库 macOS 分钟免费），并彻底移除 `macos-14` 选项。
+- job 超时 30 → 150 分钟：排队时间不再被硬超时杀掉；真正的工时长由各 step 卡住
+  （装 XcodeGen 6 分钟、解析依赖 10 分钟、归档 20 分钟）。
+- 新增 `plan` job（ubuntu，几秒起机）决定构建矩阵，摘要里直接打印本次目标标签。
+
+## v1.14.3 — 排队诊断修正（App 与构建逻辑未改）
+
+- 曾怀疑私有仓库的付款门禁（Usage blocked）导致排队，后经确认仓库为公开，
+  该原因不成立；保留结论：没有 Mac 就不存在零成本自建 runner。
+
+## v1.14.2 — 构建流程重做（App 本身没有改动）
+
+- 新增「一直停在 Waiting for a runner to pick up this job」排查表，见「构建」一节：
+  排队、额度、并发、自建 runner 四条路线。
+- workflow 重做：运行器可选（默认 `macos-26`，可切 `macos-15` / `macos-14` / `macos-15-intel` / 自建），
+  XcodeGen 改用官方预编译包（不再 `brew install`，省 2~4 分钟），SwiftPM 目录缓存，
+  30 分钟硬超时，失败自动上传 `archive.log` + `xcresult`，同分支重复触发自动取消。
+- 新增 `codemagic.yaml`：Codemagic 免费 macOS 机器的零排队备用路线。
+- `build-unsigned-ipa.sh` 补齐 DerivedData / resultBundle / SHA256，并给出更明确的失败提示。
+
 ## v1.14.1 — 快档 2 秒、温度/风扇进快档、闪存卡片重做
 
 - **快档 3 秒 → 2 秒**（低功耗模式 5 → 4 秒）。温度、风扇从慢档挪进快档：
@@ -90,10 +135,45 @@ IPA 需要 macOS + Xcode + Apple 签名。当前仓库提供 GitHub Actions 的�
 
 ### GitHub Actions
 
-1. 把整个仓库（包含 `ios/` 和 `.github/workflows/ios-unsigned.yml`）推到 GitHub。
-2. Actions → **Build unsigned iOS IPA** → Run workflow。
-3. 下载 artifact `OpenWrtMonitor-unsigned-ipa`。
+1. 仓库里要有 `ios/` 和 `.github/workflows/ios-unsigned.yml`，**workflow 文件必须在默认分支上**，
+   否则 Actions 页面里根本看不到这个 workflow（或跑的还是旧文件）。
+2. Actions → **Build unsigned iOS IPA** → Run workflow，运行器保持默认 **auto**。
+3. 下载 artifact `OpenWrtMonitor-unsigned-ipa-macos-15` 或 `...-macos-26`
+   （auto 模式下两个池子谁先起来谁先出包，产物内容一样）。
 4. 用 Sideloadly / AltStore 配合自己的 Apple ID 签名安装。
+
+#### 一直停在「Waiting for a runner to pick up this job」
+
+那行日志的意思是：任务还没被分配到任何 macOS 机器。**公开仓库的 macOS 分钟免费且不限量**，
+所以这跟额度、付款方式都无关，只有两个真实原因：
+
+1. **标签撞上了正在退役的镜像**（最常见）。`macos-14` 将于 **2026-11-02 退役**，
+   GitHub 从 10 月起就削减它的容量，还在 10/5–10/31 之间排了 8 个 brownout 窗口
+   （每次 14:00–次日 00:00 UTC；其中 10/29、10/30 两段连成 34 小时）。
+   这期间用 `macos-14` 的作业会一直排队到超时，或直接失败。
+   **先看 Action 页面那行 `Requested labels:`** —— 如果是 `macos-14`，元凶就是它。
+2. **两个健康池子恰好都满**。macOS 机器池是共享的，UTC 白天（≈北京时间晚上到凌晨）最挤。
+
+现在这套配置的对策：
+
+| 做法 | 说明 |
+| --- | --- |
+| 用默认 `auto` | 同时向 `macos-15`、`macos-26` 提交，谁先分到机器谁先跑，两边同时卡住的概率很低 |
+| 错峰 | 北京时间上午跑，命中率明显高于深夜 |
+| 别连点 | 已加 `concurrency`，同分支新触发会自动取消上一次 |
+| 换赛道 | 根目录 `codemagic.yaml` 已备好：Codemagic 免费额度含 macOS M2，起机通常一两分钟 |
+
+标签现状（2026-10）：
+
+| 标签 | 状态 |
+| --- | --- |
+| `macos-13` | 已于 2025-12 退役，写了永远等不到机器 |
+| `macos-14` | **2026-11-02 退役**，容量已被削减，不要再写 |
+| `macos-15` | 可用，推荐 |
+| `macos-latest` / `macos-26` | 可用，推荐 |
+
+自建 runner 需要一台常开的 Mac（Windows 上装不了 Xcode，租云 Mac 要按月起），
+所以没有 Mac 就不存在"零成本自建"这条路。
 
 ### Mac 本地
 

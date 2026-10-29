@@ -39,10 +39,11 @@ final class AppModel: ObservableObject {
     @Published var autoLogin: Bool {
         didSet { UserDefaults.standard.set(autoLogin, forKey: "autoLogin") }
     }
-    /// 低功耗模式：进一步拉长每一档查询周期，适合 CPU 很弱的老路由器。
-    @Published var lowPower: Bool {
+    /// 轮询配置：三档各自的秒数，以及每个数据项挂在哪一档（或关闭）。
+    /// 改完立即生效：didSet 里重启轮询循环，不用重新连接。
+    @Published var pollConfig: PollConfiguration {
         didSet {
-            UserDefaults.standard.set(lowPower, forKey: "lowPower")
+            pollConfig.save()
             if connected { startPolling() }
         }
     }
@@ -60,15 +61,12 @@ final class AppModel: ObservableObject {
     private var lastOcPid = ""
     private var lastOcTicks: Double?
     private var lastOcTotal: Double?
-    /// 每一档查询上次执行的时间，用来把重查询摊开到不同周期里。
-    private var lastSlowPoll: Date?
-    private var lastStatePoll: Date?
-    private var lastTrafficPoll: Date?
-    private var lastConnectionPoll: Date?
+    /// 每一档上次执行完成的时刻，用来算下一次该不该跑。
+    private var lastRun: [PollTier: Date] = [:]
 
     init() {
         autoLogin = UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true
-        lowPower = UserDefaults.standard.object(forKey: "lowPower") as? Bool ?? false
+        pollConfig = PollConfiguration.load()
         loadProfiles()
         loadModules()
     }
@@ -260,10 +258,7 @@ final class AppModel: ObservableObject {
         lastOcPid = ""
         lastOcTicks = nil
         lastOcTotal = nil
-        lastSlowPoll = nil
-        lastStatePoll = nil
-        lastTrafficPoll = nil
-        lastConnectionPoll = nil
+        lastRun.removeAll()
         if !keepPassword, let profile = currentProfile {
             KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
         }
@@ -352,24 +347,73 @@ final class AppModel: ObservableObject {
     // MARK: - Polling
     //
     // 路由器 CPU 往往只有几百 MHz，一次查询里 fork 出来的进程越少越好。
-    // 这里把监控拆成四档，各档独立计时，互不牵连：
-    //   快档   CPU / 内存 / 网口流量 / 负载 / WAN 口 / 温度 / 风扇
-    //          —— 一个 awk 进程读 /proc，sysfs 用内建 read 读，全程零额外进程
-    //   慢档   闪存 / DHCP 租约 / 端口                 —— 十几秒一次
-    //   状态档 OpenClash 是否安装、是否运行、配置项      —— 二十秒左右一次
-    //   指标档 OpenClash REST 的 /traffic 与 /connections
-    //          （/connections 会让 clash 序列化整张连接表，最贵，单独放慢）
-    // 全部脚本都以 nice -n 19 执行，监控永远不会和转发 / 防火墙抢 CPU。
+    // 数据项分三档，各档独立计时；同一档里的项会被拼成**一条**命令、一个 shell 跑完，
+    // 所以项多了只增加脚本长度，不增加进程数。每个项挂哪一档、每档多少秒，
+    // 都能在「设置 → 更新频率 / 数据项」里改。全部脚本以 nice -n 19 执行。
 
-    private var fastInterval: TimeInterval { lowPower ? 4 : 2 }
-    private var slowInterval: TimeInterval { lowPower ? 20 : 10 }
-    private var stateInterval: TimeInterval { lowPower ? 45 : 20 }
-    private var trafficInterval: TimeInterval { lowPower ? 12 : 6 }
-    private var connectionsInterval: TimeInterval { lowPower ? 60 : 30 }
+    func seconds(for tier: PollTier) -> Double {
+        pollConfig.seconds(for: tier)
+    }
 
-    /// 给设置页显示当前节奏。
+    /// 某一档当前要采集的数据项，顺序与设置页一致。
+    func items(in tier: PollTier) -> [PollItem] {
+        PollItem.allCases.filter { pollConfig.tier(for: $0) == tier }
+    }
+
+    /// 设置页顶部的节奏摘要。
     var pollSummary: String {
-        "\(Int(fastInterval)) 秒 / \(Int(slowInterval)) 秒"
+        let fast = Int(seconds(for: .fast).rounded())
+        let medium = Int(seconds(for: .medium).rounded())
+        let slow = Int(seconds(for: .slow).rounded())
+        return "\(fast) / \(medium) / \(slow) 秒"
+    }
+
+    func setTier(_ tier: PollTier?, for item: PollItem) {
+        guard !item.isRequired else { return }
+        var config = pollConfig
+        config.setTier(tier, for: item)
+        pollConfig = config
+    }
+
+    func setSeconds(_ value: Double, for tier: PollTier) {
+        var config = pollConfig
+        config.setSeconds(value, for: tier)
+        pollConfig = config
+    }
+
+    func applyPreset(_ preset: PollPreset) {
+        var config = pollConfig
+        config.fastSeconds = preset.fast
+        config.mediumSeconds = preset.medium
+        config.slowSeconds = preset.slow
+        pollConfig = config
+    }
+
+    /// 恢复默认：所有项回到默认档位，秒数回到 2 / 10 / 20。
+    func resetPollConfig() {
+        var config = PollConfiguration()
+        config.assignments = [:]
+        pollConfig = config
+    }
+
+    private func isDue(_ tier: PollTier) -> Bool {
+        guard !items(in: tier).isEmpty else { return false }
+        guard let last = lastRun[tier] else { return true }
+        return Date().timeIntervalSince(last) >= pollConfig.seconds(for: tier) - 0.05
+    }
+
+    /// 距离下一次该执行还有多久：让循环精确睡到那一刻，不空转也不迟到。
+    private func nextTickDelay() -> TimeInterval {
+        let now = Date()
+        var delay = 60.0
+        for tier in PollTier.allCases {
+            guard !items(in: tier).isEmpty else { continue }
+            guard let last = lastRun[tier] else { return 0.05 }
+            let due = last.addingTimeInterval(pollConfig.seconds(for: tier))
+                .timeIntervalSince(now)
+            delay = min(delay, due)
+        }
+        return max(0.3, delay)
     }
 
     private func startPolling() {
@@ -377,11 +421,10 @@ final class AppModel: ObservableObject {
         pollTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                let started = Date()
                 await self.pollTick()
                 if Task.isCancelled { return }
-                let remaining = self.fastInterval - Date().timeIntervalSince(started)
-                try? await Task.sleep(for: .milliseconds(Int(max(0.5, remaining) * 1000)))
+                let delay = self.nextTickDelay()
+                try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
             }
         }
     }
@@ -392,67 +435,104 @@ final class AppModel: ObservableObject {
         pollTask = nil
     }
 
-    /// 连接建立后的首次填充：一条一条发，避免开屏瞬间在路由器上堆一串命令。
+    /// 连接后的首次填充，按“先出数字、再出细节”的顺序发命令：
+    ///   快档 → 静态信息 → 含 OpenClash 状态的那一档 → 剩下的档
+    /// 老版本是 info → 慢档 → 快档，把最贵的一条排在最前面，
+    /// 所以开屏要好几个 SSH 往返之后才看到 CPU 和网速。
     private func bootstrapRefresh() async {
-        await refreshInfo()
-        try? await pollSlow()
-        try? await pollFast()
-        lastSuccessfulPoll = Date()
-        lastSlowPoll = Date()
-        lastStatePoll = Date()
-        if openClash.running {
-            await pollMetrics(includeConnections: true)
-            lastTrafficPoll = Date()
-            lastConnectionPoll = Date()
+        lastRun.removeAll()
+        for tier in bootstrapOrder() {
+            do {
+                try await runTier(tier)
+                lastRun[tier] = Date()
+            } catch {
+                if tier == .fast {
+                    status = "连接中断"
+                    return
+                }
+            }
+            if tier == .fast {
+                // 型号、固件比端口、闪存便宜，插在快档后面，别让标题一直空着
+                await refreshInfo()
+            }
         }
+        lastSuccessfulPoll = Date()
+    }
+
+    /// 静态信息排在快档之后、其余档之前；含 OpenClash 状态的那一档优先，
+    /// 因为指标档要用它查到的端口和密钥。
+    private func bootstrapOrder() -> [PollTier] {
+        var order: [PollTier] = [.fast]
+        let rest = PollTier.allCases.filter { $0 != .fast }
+        if let stateTier = rest.first(where: { items(in: $0).contains(.clashState) }) {
+            order.append(stateTier)
+        }
+        for tier in rest where !order.contains(tier) { order.append(tier) }
+        return order
     }
 
     private func pollTick() async {
         guard connected else { return }
-
-        var fastOK = true
-        do {
-            try await pollFast()
-        } catch {
-            fastOK = false
-        }
-        guard fastOK else {
-            status = "连接中断"
-            if !reconnecting, activePassword != nil {
-                Task { await self.reconnect(force: false) }
+        for tier in PollTier.allCases {
+            guard isDue(tier) else { continue }
+            do {
+                try await runTier(tier)
+                lastRun[tier] = Date()
+                if tier == .fast {
+                    lastSuccessfulPoll = Date()
+                    status = "已连接"
+                }
+            } catch {
+                if tier == .fast {
+                    status = "连接中断"
+                    if !reconnecting, activePassword != nil {
+                        Task { await self.reconnect(force: false) }
+                    }
+                    return
+                }
+                // 中档、慢档失败不改连接状态，等下一轮再试
             }
-            return
-        }
-        lastSuccessfulPoll = Date()
-        status = "已连接"
-
-        let now = Date()
-
-        if lastSlowPoll.map({ now.timeIntervalSince($0) >= slowInterval }) ?? true {
-            try? await pollSlow()
-            lastSlowPoll = Date()
-        }
-
-        if lastStatePoll.map({ now.timeIntervalSince($0) >= stateInterval }) ?? true {
-            await refreshOpenClash()
-            lastStatePoll = Date()
-        }
-
-        if openClash.running,
-           lastTrafficPoll.map({ now.timeIntervalSince($0) >= trafficInterval }) ?? true {
-            let connectionsDue = lastConnectionPoll
-                .map { now.timeIntervalSince($0) >= connectionsInterval } ?? true
-            await pollMetrics(includeConnections: connectionsDue)
-            lastTrafficPoll = Date()
-            if connectionsDue { lastConnectionPoll = Date() }
         }
     }
 
-    private func pollFast() async throws {
-        let sections = parseSections(try await execute(fastCommand))
+    /// 跑一档里的所有项。OpenClash 状态和它的指标必须分成两条命令：
+    /// 指标里要用的端口和密钥，来自状态查询的结果。
+    private func runTier(_ tier: PollTier) async throws {
+        let assigned = items(in: tier)
+        guard !assigned.isEmpty else { return }
+        let stateItems = assigned.filter { $0 == .clashState }
+        let otherItems = assigned.filter { $0 != .clashState }
+        if !stateItems.isEmpty {
+            let sections = parseSections(try await execute(command(for: stateItems)))
+            apply(sections, items: stateItems)
+        }
+        if !otherItems.isEmpty {
+            let sections = parseSections(try await execute(command(for: otherItems)))
+            apply(sections, items: otherItems)
+        }
+    }
+
+    private func apply(_ sections: [String: String], items: [PollItem]) {
+        if items.contains(.core) { applyCore(sections) }
+        if items.contains(.sensors) {
+            updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
+        }
+        if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "") }
+        if items.contains(.devices) { updateDevices(sections["LEASES"] ?? "") }
+        if items.contains(.ports) {
+            updatePorts(ports: sections["PORTS"] ?? "", brif: sections["BRIF"] ?? "")
+        }
+        if items.contains(.clashState) {
+            openClash = parseOpenClashInfo(sections, current: openClash)
+        }
+        if items.contains(.clashTraffic) || items.contains(.clashConnections) {
+            applyMetrics(sections)
+        }
+    }
+
+    private func applyCore(_ sections: [String: String]) {
         updateCPU(sections["STAT"] ?? "")
         updateMemory(sections["MEMINFO"] ?? "")
-        updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         let wan = parseWanDevice(sections["ROUTE"] ?? "")
         if !wan.isEmpty, wan != stats.wanDevice {
             stats.wanDevice = wan
@@ -474,37 +554,29 @@ final class AppModel: ObservableObject {
         appendHistory()
     }
 
-    private func pollSlow() async throws {
-        let sections = parseSections(try await execute(slowCommand))
-        updateFlash(sections["FLASH"] ?? "")
-        updateDevices(sections["LEASES"] ?? "")
-        updatePorts(ports: sections["PORTS"] ?? "", brif: sections["BRIF"] ?? "")
-    }
-
-    private func pollMetrics(includeConnections: Bool) async {
-        do {
-            let sections = parseSections(
-                try await execute(metricsCommand(includeConnections: includeConnections))
-            )
-            var value = ocMetrics
-            if let data = json(sections["TRAFFIC"]),
-               let up = data["up"] as? Double, let down = data["down"] as? Double {
-                value.upload = up
-                value.download = down
-            }
-            if let data = json(sections["CONN"]) {
-                value.uploadTotal = UInt64((data["uploadTotal"] as? Int) ?? 0)
-                value.downloadTotal = UInt64((data["downloadTotal"] as? Int) ?? 0)
-                value.connections = (data["connections"] as? [[String: Any]])?.count ?? 0
-            }
-            let memory = parseVmRSS(sections["OCSTATUS"] ?? "")
+    /// OpenClash 指标：可能只有 /traffic，可能只有 /connections，也可能一起来了。
+    /// 哪一段存在就更新哪一段，缺的部分保持上一次的值。
+    private func applyMetrics(_ sections: [String: String]) {
+        var value = ocMetrics
+        if let data = json(sections["TRAFFIC"]),
+           let up = data["up"] as? Double, let down = data["down"] as? Double {
+            value.upload = up
+            value.download = down
+        }
+        if let data = json(sections["CONN"]) {
+            value.uploadTotal = UInt64((data["uploadTotal"] as? Int) ?? 0)
+            value.downloadTotal = UInt64((data["downloadTotal"] as? Int) ?? 0)
+            value.connections = (data["connections"] as? [[String: Any]])?.count ?? 0
+        }
+        if let status = sections["OCSTATUS"] {
+            let memory = parseVmRSS(status)
             if memory > 0 { value.memory = memory }
+        }
+        if sections["OCSTAT"] != nil, sections["SYSTAT"] != nil {
             value.load = currentCoreLoad()
             updateCoreCPU(sections, into: &value)
-            ocMetrics = value
-        } catch {
-            // 指标是可选的，别因为一次 curl 超时就把页面状态改成错误。
         }
+        ocMetrics = value
     }
 
     func refreshInfo() async {
@@ -517,23 +589,18 @@ final class AppModel: ObservableObject {
             value.architecture = firstLine(sections["ARCH"])
             value.cpuModel = parseCPUModel(sections["CPUINFO"] ?? "")
             value.cpuCores = parseCPUCores(sections["CPUINFO"] ?? "")
-            let release = sections["RELEASE"] ?? ""
-            value.firmware = parseRelease(release)
-            if let load = firstLine(sections["LOAD"]).split(separator: " ").first {
-                value.load = String(load)
-            }
+            value.firmware = parseRelease(sections["RELEASE"] ?? "")
             routerInfo = value
-            openClash = parseOpenClashInfo(sections, current: openClash)
             let wan = parseWanDevice(sections["ROUTE"] ?? "")
             if !wan.isEmpty { stats.wanDevice = wan }
         } catch {
-            errorMessage = error.localizedDescription
+            // 静态信息拿不到就先不显示，别把连接状态改成错误
         }
     }
 
     func refreshOpenClash() async {
         do {
-            let sections = parseSections(try await execute(openClashCommand))
+            let sections = parseSections(try await execute(command(for: [.clashState])))
             openClash = parseOpenClashInfo(sections, current: openClash)
         } catch {
             errorMessage = error.localizedDescription
@@ -1079,103 +1146,108 @@ private extension AppModel {
         """)
     }
 
-    /// 快档：CPU、内存、网口流量、运行时间、负载、默认路由，以及温度、风扇。
-    /// /proc 那几个文件全部交给**一个** awk 读完并按文件名打段标记——
-    /// 老版本这里是 5 个 cat，端口那一块更是每个网口起 8 个进程。
-    /// 温度 / 风扇是单值 sysfs，用 shell 内建 read 读，不额外 fork 进程。
-    var fastCommand: String {
-        lowPriority("""
-        LC_ALL=C awk 'FNR==1{n=split(FILENAME,p,"/"); print "@@" toupper(p[n])} {print}' /proc/stat /proc/meminfo /proc/net/dev /proc/uptime /proc/loadavg /proc/net/route 2>/dev/null
-        echo @@TEMP
-        for f in /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input; do
-          if [ -r "$f" ]; then read -r v < "$f"; echo "T $v"; fi
-        done
-        echo @@FAN
-        for f in /sys/class/hwmon/hwmon*/fan*_input; do
-          if [ -r "$f" ]; then read -r v < "$f"; echo "F $v"; fi
-        done
-        true
-        """)
+    /// 每个数据项对应一段脚本。同一档里的项用换行拼成一条命令，交给同一个 shell 跑完，
+    /// 所以“项多了”只是脚本变长，不会多 fork 进程。
+    func script(for item: PollItem) -> String {
+        switch item {
+        case .core:
+            return """
+            LC_ALL=C awk 'FNR==1{n=split(FILENAME,p,"/"); print "@@" toupper(p[n])} {print}' /proc/stat /proc/meminfo /proc/net/dev /proc/uptime /proc/loadavg /proc/net/route 2>/dev/null
+
+            """
+        case .sensors:
+            return """
+            echo @@TEMP
+            for f in /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input; do
+              if [ -r "$f" ]; then read -r v < "$f"; echo "T $v"; fi
+            done
+            echo @@FAN
+            for f in /sys/class/hwmon/hwmon*/fan*_input; do
+              if [ -r "$f" ]; then read -r v < "$f"; echo "F $v"; fi
+            done
+            true
+
+            """
+        case .flash:
+            return """
+            echo @@FLASH
+            df -k /rom /overlay / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "SYS",$3; else if($NF=="/overlay")print "TOTAL",$2,"APP",$3,"AVAIL",$4; else if($NF=="/")print "ROOT",$2,$3,$4}'
+
+            """
+        case .devices:
+            return """
+            echo @@LEASES
+            cat /tmp/dhcp.leases 2>/dev/null
+
+            """
+        case .ports:
+            return """
+            echo @@BRIF
+            BRN=0
+            for x in /sys/class/net/br-lan/brif/*; do
+              if [ -e "$x" ]; then echo "${x##*/}"; BRN=$((BRN+1)); fi
+            done
+            echo @@PORTS
+            NETTAB=$(awk -F: 'NR>2{gsub(/^[ \\t]+/,"",$2); gsub(/[ \\t]/,"",$1); split($2,a,/[ \\t]+/); printf "%s %s %s ",$1,a[1],a[9]}' /proc/net/dev 2>/dev/null)
+            ADRTAB=$(ip -4 -o addr show 2>/dev/null | awk '{printf "%s %s ",$2,$4}')
+            for d in /sys/class/net/*; do
+              n=${d##*/}
+              [ "$n" = "lo" ] && continue
+              s=""; sp=""; dx=""; rx=0; tx=0; a=""
+              if [ -r "$d/operstate" ]; then read -r s < "$d/operstate"; fi
+              if [ -r "$d/speed" ]; then read -r sp < "$d/speed"; fi
+              if [ -r "$d/duplex" ]; then read -r dx < "$d/duplex"; fi
+              set -- $NETTAB
+              while [ $# -ge 3 ]; do
+                if [ "$1" = "$n" ]; then rx=$2; tx=$3; break; fi
+                shift 3
+              done
+              set -- $ADRTAB
+              while [ $# -ge 2 ]; do
+                if [ "$1" = "$n" ]; then a=$2; break; fi
+                shift 2
+              done
+              printf 'P\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$n" "$s" "$sp" "$dx" "$rx" "$tx" "$a" "$BRN"
+            done
+            true
+
+            """
+        case .clashState:
+            return """
+            echo @@OCSTATE
+            set -- $(pidof clash clash_meta clash_tun clash_lite mihomo 2>/dev/null); OCPID=$1
+            if [ -n "$OCPID" ]; then echo running
+            elif [ -d /usr/share/openclash ] || [ -x /etc/init.d/openclash ]; then echo stopped
+            else echo missing; fi
+            echo @@OCPID; echo "$OCPID"
+            echo @@OCMODE; uci -q get openclash.config.proxy_mode 2>/dev/null
+            echo @@OCCONFIG; uci -q get openclash.config.config_path 2>/dev/null
+            echo @@OCCONFIGS; ls /etc/openclash/config/*.yaml /etc/openclash/config/*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null
+            echo @@OCPORT; p=$(uci -q get openclash.config.cn_port 2>/dev/null); [ -n "$p" ] || p=9090; echo "$p"
+            echo @@OCSECRET; uci -q get openclash.config.dashboard_password 2>/dev/null
+            echo @@OCDASH; uci -q get openclash.config.default_dashboard 2>/dev/null
+            echo @@OCDIRS; for d in zashboard metacubexd yacd dashboard; do [ -d "/usr/share/openclash/ui/$d" ] && echo "$d"; done
+            true
+
+            """
+        case .clashTraffic:
+            return trafficScript
+        case .clashConnections:
+            return connectionsScript
+        }
     }
 
-    /// 慢档：闪存、DHCP 租约、LAN 端口。
-    /// 单值 sysfs 一律用 shell 内建 read 读，不再为每个文件 fork 一个 cat。
-    var slowCommand: String {
-        lowPriority("""
-        echo @@FLASH
-        df -k /rom /overlay / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "SYS",$3; else if($NF=="/overlay")print "TOTAL",$2,"APP",$3,"AVAIL",$4; else if($NF=="/")print "ROOT",$2,$3,$4}'
-        echo @@LEASES
-        cat /tmp/dhcp.leases 2>/dev/null
-        echo @@BRIF
-        BRN=0
-        for x in /sys/class/net/br-lan/brif/*; do
-          if [ -e "$x" ]; then echo "${x##*/}"; BRN=$((BRN+1)); fi
-        done
-        echo @@PORTS
-        NETTAB=$(awk -F: 'NR>2{gsub(/^[ \\t]+/,"",$2); gsub(/[ \\t]/,"",$1); split($2,a,/[ \\t]+/); printf "%s %s %s ",$1,a[1],a[9]}' /proc/net/dev 2>/dev/null)
-        ADRTAB=$(ip -4 -o addr show 2>/dev/null | awk '{printf "%s %s ",$2,$4}')
-        for d in /sys/class/net/*; do
-          n=${d##*/}
-          [ "$n" = "lo" ] && continue
-          s=""; sp=""; dx=""; rx=0; tx=0; a=""
-          if [ -r "$d/operstate" ]; then read -r s < "$d/operstate"; fi
-          if [ -r "$d/speed" ]; then read -r sp < "$d/speed"; fi
-          if [ -r "$d/duplex" ]; then read -r dx < "$d/duplex"; fi
-          set -- $NETTAB
-          while [ $# -ge 3 ]; do
-            if [ "$1" = "$n" ]; then rx=$2; tx=$3; break; fi
-            shift 3
-          done
-          set -- $ADRTAB
-          while [ $# -ge 2 ]; do
-            if [ "$1" = "$n" ]; then a=$2; break; fi
-            shift 2
-          done
-          printf 'P\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$n" "$s" "$sp" "$dx" "$rx" "$tx" "$a" "$BRN"
-        done
-        true
-        """)
-    }
-
-    /// 状态档：只查 OpenClash 的开关状态和配置，不碰它的 REST 接口。
-    var openClashCommand: String {
-        lowPriority("""
-        echo @@OCSTATE
-        set -- $(pidof clash clash_meta clash_tun clash_lite mihomo 2>/dev/null); OCPID=$1
-        if [ -n "$OCPID" ]; then echo running
-        elif [ -d /usr/share/openclash ] || [ -x /etc/init.d/openclash ]; then echo stopped
-        else echo missing; fi
-        echo @@OCPID; echo "$OCPID"
-        echo @@OCMODE; uci -q get openclash.config.proxy_mode 2>/dev/null
-        echo @@OCCONFIG; uci -q get openclash.config.config_path 2>/dev/null
-        echo @@OCCONFIGS; ls /etc/openclash/config/*.yaml /etc/openclash/config/*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null
-        echo @@OCPORT; p=$(uci -q get openclash.config.cn_port 2>/dev/null); [ -n "$p" ] || p=9090; echo "$p"
-        echo @@OCSECRET; uci -q get openclash.config.dashboard_password 2>/dev/null
-        echo @@OCDASH; uci -q get openclash.config.default_dashboard 2>/dev/null
-        echo @@OCDIRS; for d in zashboard metacubexd yacd dashboard; do [ -d "/usr/share/openclash/ui/$d" ] && echo "$d"; done
-        true
-        """)
-    }
-
-    /// 指标档：端口和密钥复用上一轮状态查询的结果，不再每次都去 uci 取；
-    /// /connections 会让 clash 把整张连接表序列化一遍，是最贵的一个接口，
-    /// 所以只在连接数到期时才取。
-    func metricsCommand(includeConnections: Bool) -> String {
+    /// OpenClash 流量 + 内核内存 / CPU。端口和密钥复用状态档查到的结果。
+    var trafficScript: String {
         let port = openClash.panelPort > 0 ? openClash.panelPort : 9090
         let auth = openClash.secret.isEmpty
             ? ""
             : "-H \(shellQuoted("Authorization: Bearer \(openClash.secret)")) "
-        let traffic = """
+        return """
         echo @@TRAFFIC
         curl -s -f --max-time 3 \(auth)"http://127.0.0.1:\(port)/traffic" 2>/dev/null
         echo
-        """
-        let connections = includeConnections ? """
-        echo @@CONN
-        curl -s -f --max-time 4 \(auth)"http://127.0.0.1:\(port)/connections" 2>/dev/null
-        echo
-        """ : ""
-        let proc = """
+
         set -- $(pidof clash clash_meta clash_tun clash_lite mihomo 2>/dev/null); OCPID=$1
         echo @@OCPID
         echo "$OCPID"
@@ -1186,10 +1258,28 @@ private extension AppModel {
         echo @@SYSTAT
         head -n 1 /proc/stat 2>/dev/null
         true
+
         """
-        return lowPriority([traffic, connections, proc]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n"))
+    }
+
+    /// OpenClash 连接表：会让 clash 把整张表序列化一遍，是最贵的一个接口。
+    var connectionsScript: String {
+        let port = openClash.panelPort > 0 ? openClash.panelPort : 9090
+        let auth = openClash.secret.isEmpty
+            ? ""
+            : "-H \(shellQuoted("Authorization: Bearer \(openClash.secret)")) "
+        return """
+        echo @@CONN
+        curl -s -f --max-time 4 \(auth)"http://127.0.0.1:\(port)/connections" 2>/dev/null
+        echo
+
+        """
+    }
+
+    /// 把一档里的项拼成一条命令：同一个 shell 里按顺序跑完，只有一次进程创建。
+    func command(for items: [PollItem]) -> String {
+        let body = items.map { script(for: $0) }.joined(separator: "\n")
+        return lowPriority(body)
     }
 
     var accessCommand: String {
