@@ -6,8 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("themeMode") private var themeMode = "system"
     @State private var confirmLogout = false
-    @State private var showEditor = false
-    @State private var editProfile: RouterProfile? = nil
+    @State private var editorRoute: ConnectionEditorRoute?
     @State private var showRouterWeb = false
     @State private var showRouters = false
 
@@ -28,8 +27,9 @@ struct SettingsView: View {
             .background(Color.clear)
             .navigationTitle("设置")
             .toolbarBackground(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showEditor) {
-                ConnectionEditorView(profile: editProfile)
+            .sheet(item: $editorRoute) { route in
+                ConnectionEditorView(profile: route.profile)
+                    .id(route.id)
             }
             .sheet(isPresented: $showRouterWeb) {
                 if let url = model.routerWebURL {
@@ -84,7 +84,9 @@ struct SettingsView: View {
                         Task { await model.manualRefresh() }
                     }
                     chip("网页后台", icon: "safari") { showRouterWeb = true }
-                    chip("编辑", icon: "pencil") { openEditor(model.currentProfile) }
+                    chip("编辑", icon: "pencil") {
+                        openEditor(model.currentProfile ?? model.profiles.first)
+                    }
                 }
 
                 if model.profiles.count > 1 {
@@ -196,8 +198,7 @@ struct SettingsView: View {
     }
 
     private func openEditor(_ profile: RouterProfile?) {
-        editProfile = profile
-        showEditor = true
+        editorRoute = profile.map(ConnectionEditorRoute.edit) ?? .new
     }
 
     private func routerRow(_ profile: RouterProfile) -> some View {
@@ -377,7 +378,7 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 9) {
-                infoRow("版本", "1.17.0")
+                infoRow("版本", "1.18.0")
                 infoRow("连接方式", "SSH 直连")
                 infoRow("采集范围", "只采当前页面要用的数据")
                 infoRow("数据去向", "只在本机与路由器之间")
@@ -450,6 +451,30 @@ struct SectionCard<Content: View>: View {
 }
 
 // MARK: - 连接编辑
+
+/// 编辑器要打开哪一种：新建，还是编辑某一个已保存的连接。
+///
+/// 之前用 `showEditor` 布尔 + 单独的 `editProfile` 两个状态驱动 `.sheet(isPresented:)`，
+/// 点「编辑」时 sheet 的内容闭包可能拿到还没写入的旧值（nil），于是第一次点开
+/// 总是「新建连接」。改成用 item 驱动，数据本身决定弹窗，就不会再错位。
+private enum ConnectionEditorRoute: Identifiable {
+    case new
+    case edit(RouterProfile)
+
+    var id: String {
+        switch self {
+        case .new: return "new"
+        case .edit(let profile): return profile.id.uuidString
+        }
+    }
+
+    var profile: RouterProfile? {
+        switch self {
+        case .new: return nil
+        case .edit(let profile): return profile
+        }
+    }
+}
 
 private struct ConnectionEditorView: View {
     let profile: RouterProfile?

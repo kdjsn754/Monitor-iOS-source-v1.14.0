@@ -171,43 +171,62 @@ struct OverviewView: View {
         let info = model.flashInfo
         return Group {
             if info.hasData {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(formatFlashBytes(info.usedBytes))
-                            .font(.title3.weight(.semibold))
-                            .monospacedDigit()
-                        Text("已用 / 共 \(formatFlashBytes(info.total))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        Spacer(minLength: 6)
-                        Text("\(Int((info.usedFraction * 100).rounded()))%")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(flashAccent(info.usedFraction))
-                            .monospacedDigit()
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Text(formatFlashBytes(info.usedBytes))
+                                    .font(.system(size: 23, weight: .semibold, design: .rounded))
+                                    .monospacedDigit()
+                                Text("已用")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("共 \(formatFlashBytes(info.total)) · 剩余 \(formatFlashBytes(info.available))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+
+                        Spacer(minLength: 4)
+
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(Int((info.usedFraction * 100).rounded()))%")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(flashTone(info.usedFraction))
+                            Text("占用率")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
                     }
+
                     FlashCompositionBar(info: info)
-                    VStack(spacing: 7) {
-                        FlashLegendRow(
-                            label: "系统占用",
-                            bytes: info.systemUsed,
-                            fraction: info.systemFraction,
-                            color: Color(.systemGray)
-                        )
-                        FlashLegendRow(
-                            label: "应用程序",
-                            bytes: info.appUsed,
-                            fraction: info.appFraction,
-                            color: .blue
-                        )
-                        FlashLegendRow(
-                            label: "可用空间",
-                            bytes: info.available,
-                            fraction: info.availableFraction,
-                            color: Color(.systemGray3)
-                        )
+
+                    VStack(spacing: 9) {
+                        FlashLegendRow(title: "系统占用", bytes: info.systemUsed,
+                                       share: info.systemShare, color: Color(.systemGray))
+                        FlashLegendRow(title: "应用程序", bytes: info.appUsed,
+                                       share: info.appShare, color: .blue)
+                        FlashLegendRow(title: "可用空间", bytes: info.available,
+                                       share: info.availableShare,
+                                       color: Color(.systemGray3), hollow: true)
+                    }
+
+                    if info.usedFraction >= 0.9 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(info.usedFraction >= 0.97
+                                 ? "闪存已接近写满，建议清理日志或卸载不用的插件"
+                                 : "闪存空间偏紧，建议清理日志或卸载不用的插件")
+                                .font(.caption2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .foregroundStyle(flashTone(info.usedFraction))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             } else {
@@ -220,8 +239,8 @@ struct OverviewView: View {
         }
     }
 
-    /// 剩余空间少于 10% 转橙、少于 3% 转红，其余用蓝色。
-    private func flashAccent(_ used: Double) -> Color {
+    /// 占用低于 90% 用蓝色，90% 起转橙，97% 起转红——和进度条、百分比同一套颜色。
+    private func flashTone(_ used: Double) -> Color {
         if used >= 0.97 { return .red }
         if used >= 0.90 { return .orange }
         return .blue
@@ -333,64 +352,92 @@ struct InfoRow: View {
     }
 }
 
-/// 一条横向"容量条"，按系统 / 应用 / 可用三段拼接，一眼看出空间构成。
+/// 一条横向"容量条"：系统占用（中性灰）+ 应用程序（蓝）作为已用部分，
+/// 剩下的是轨道本身，也就是可用空间。两段之间留 2pt 缝隙，边界比纯色拼接清楚。
 private struct FlashCompositionBar: View {
     let info: FlashInfo
 
+    private var systemColor: Color { Color(.systemGray) }
+    private var appColor: Color { .blue }
+
     var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
+        GeometryReader { proxy in
+            let width = max(0, proxy.size.width)
+            let systemWidth = width * CGFloat(info.systemShare)
+            let appWidth = width * CGFloat(info.appShare)
+            let gap: CGFloat = (systemWidth > 3 && appWidth > 3) ? 2 : 0
+
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color(.systemGray6))
-                HStack(spacing: 0) {
-                    segment(width: width * CGFloat(info.systemFraction), color: Color(.systemGray))
-                    segment(width: width * CGFloat(info.appFraction), color: .blue)
-                    segment(width: width * CGFloat(info.availableFraction), color: Color(.systemGray3))
+                    .fill(Color(.systemGray4))
+
+                HStack(spacing: gap) {
+                    if systemWidth > 0 {
+                        Rectangle()
+                            .fill(systemColor)
+                            .frame(width: systemWidth)
+                    }
+                    if appWidth > 0 {
+                        Rectangle()
+                            .fill(appColor)
+                            .frame(width: appWidth)
+                    }
                 }
+                .frame(width: width, alignment: .leading)
             }
             .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color(.separator).opacity(0.45), lineWidth: 0.5)
+            }
         }
-        .frame(height: 13)
+        .frame(height: 12)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("已用 \(Int((info.usedFraction * 100).rounded()))%")
-    }
-
-    private func segment(width: CGFloat, color: Color) -> some View {
-        Rectangle()
-            .fill(color)
-            .frame(width: max(0, width))
+        .accessibilityLabel("已用 \(Int((info.usedFraction * 100).rounded()))%，共 \(formatFlashBytes(info.total))")
     }
 }
 
+/// 图例一行：色点（可用空间是空心点）→ 名称 → 占比 → 容量。
+/// 占比用次要色、容量用主色，避免整行灰成一团看不清。
 private struct FlashLegendRow: View {
-    let label: String
+    let title: String
     let bytes: UInt64
-    let fraction: Double
+    let share: Double
     let color: Color
+    var hollow = false
 
     private var percent: Int {
-        Int((max(0, min(1, fraction)) * 100).rounded())
+        Int((max(0, min(1, share)) * 100).rounded())
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(color)
-                .frame(width: 8, height: 8)
-            Text(label)
+        HStack(spacing: 8) {
+            Group {
+                if hollow {
+                    Circle().strokeBorder(color, lineWidth: 1.5)
+                } else {
+                    Circle().fill(color)
+                }
+            }
+            .frame(width: 8, height: 8)
+
+            Text(title)
                 .font(.subheadline)
-                .lineLimit(1)
+                .foregroundStyle(.primary)
+
             Spacer(minLength: 6)
+
             Text("\(percent)%")
-                .font(.caption)
+                .font(.caption.weight(.medium))
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .frame(width: 36, alignment: .trailing)
+                .frame(width: 38, alignment: .trailing)
+
             Text(formatFlashBytes(bytes))
-                .font(.subheadline)
+                .font(.subheadline.weight(.medium))
                 .monospacedDigit()
-                .frame(width: 72, alignment: .trailing)
+                .foregroundStyle(.primary)
+                .frame(width: 74, alignment: .trailing)
         }
     }
 }

@@ -62,6 +62,10 @@ final class AppModel: ObservableObject {
     private var lastOcPid = ""
     private var lastOcTicks: Double?
     private var lastOcTotal: Double?
+    /// /traffic 取不到时的兜底基线：用 /connections 的累计值做差算速度。
+    private var lastOcUploadTotal: UInt64?
+    private var lastOcDownloadTotal: UInt64?
+    private var lastOcTotalDate: Date?
 
     init() {
         autoLogin = UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true
@@ -257,6 +261,9 @@ final class AppModel: ObservableObject {
         lastOcPid = ""
         lastOcTicks = nil
         lastOcTotal = nil
+        lastOcUploadTotal = nil
+        lastOcDownloadTotal = nil
+        lastOcTotalDate = nil
         if !keepPassword, let profile = currentProfile {
             KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
         }
@@ -387,9 +394,13 @@ final class AppModel: ObservableObject {
             }
             while !Task.isCancelled {
                 let interval = self.pollSeconds
-                try? await Task.sleep(for: .milliseconds(Int(interval * 1000)))
-                if Task.isCancelled { return }
+                let started = Date()
                 await self.pollTick()
+                if Task.isCancelled { return }
+                // 这一轮本身要花时间（/traffic 是流式接口，至少一秒才吐第一行），
+                // 把耗时从间隔里扣掉，实际刷新节奏才和用户设置的一致。
+                let remaining = interval - Date().timeIntervalSince(started)
+                try? await Task.sleep(for: .milliseconds(Int(max(0.25, remaining) * 1000)))
             }
         }
     }
@@ -508,20 +519,49 @@ final class AppModel: ObservableObject {
     private func applyMetrics(_ sections: [String: String]) {
         var value = ocMetrics
         var reachable = false
-        if let data = json(sections["TRAFFIC"]),
-           let up = number(data["up"]), let down = number(data["down"]) {
-            value.upload = up
-            value.download = down
-            reachable = true
-        }
+        let now = Date()
+
+        var gotConnectionTotal = false
         if let data = json(sections["CONN"]) {
             value.uploadTotal = UInt64(number(data["uploadTotal"]) ?? 0)
             value.downloadTotal = UInt64(number(data["downloadTotal"]) ?? 0)
             if let rows = data["connections"] as? [[String: Any]] {
                 value.connections = rows.count
             }
+            gotConnectionTotal = true
             reachable = true
         }
+
+        var gotTraffic = false
+        if let data = json(sections["TRAFFIC"]),
+           let up = number(data["up"]), let down = number(data["down"]) {
+            value.upload = up
+            value.download = down
+            gotTraffic = true
+            reachable = true
+        }
+
+        // /traffic 是每秒一行的流式接口，部分固件上 curl/wget 会被砍断、或干脆没有这个接口。
+        // 这时用 /connections 的累计值做差补一个速度，界面至少还在动，
+        // 而不是永远停在 0（连接关闭时累计值会回落，负数按 0 处理）。
+        if !gotTraffic, gotConnectionTotal {
+            if let lastUp = lastOcUploadTotal, let lastDown = lastOcDownloadTotal,
+               let lastDate = lastOcTotalDate {
+                let elapsed = now.timeIntervalSince(lastDate)
+                if elapsed >= 0.5, elapsed <= 30 {
+                    value.upload = Double(value.uploadTotal > lastUp
+                                          ? value.uploadTotal - lastUp : 0) / elapsed
+                    value.download = Double(value.downloadTotal > lastDown
+                                            ? value.downloadTotal - lastDown : 0) / elapsed
+                }
+            }
+        }
+        if gotConnectionTotal {
+            lastOcUploadTotal = value.uploadTotal
+            lastOcDownloadTotal = value.downloadTotal
+            lastOcTotalDate = now
+        }
+
         if let status = sections["OCSTATUS"] {
             let memory = parseVmRSS(status)
             if memory > 0 { value.memory = memory }
@@ -668,6 +708,9 @@ final class AppModel: ObservableObject {
         info.running = state == "running"
         if !info.running {
             ocMetrics = OpenClashMetrics()
+            lastOcUploadTotal = nil
+            lastOcDownloadTotal = nil
+            lastOcTotalDate = nil
         }
         info.mode = firstLine(sections["OCMODE"])
         if info.mode.isEmpty { info.mode = "rule" }
@@ -976,11 +1019,58 @@ final class AppModel: ObservableObject {
             .first(where: { !$0.isEmpty }) ?? ""
     }
 
+    /// 取一段文本里的 JSON 对象。
+    ///
+    /// 内核的 /traffic 是**流式**接口：每秒吐一行 `{"up":…,"down":…}` 并且不断开连接，
+    /// 所以一次读回来常常是多个对象首尾相接。旧版直接「第一个 `{` 到最后一个 `}`」取下标，
+    /// 拼出来的字符串必然是非法 JSON，解析永远失败——实时流量于是一直停在 0。
+    /// 这里改成按大括号配对（跳过字符串里的括号）切出每个对象，取最后一个能解析的，
+    /// 也就是最新的那个；单对象、带前后杂字符的情况一样能处理。
     private func json(_ text: String?) -> [String: Any]? {
-        guard let text, let start = text.firstIndex(of: "{"),
-              let end = text.lastIndex(of: "}") else { return nil }
-        let value = String(text[start...end])
-        guard let data = value.data(using: .utf8),
+        guard let text, text.contains("{") else { return nil }
+        if let object = decodeJSON(text) { return object }
+        var depth = 0
+        var start: String.Index?
+        var inString = false
+        var escaped = false
+        var latest: [String: Any]?
+        for index in text.indices {
+            let char = text[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if char == "\\" {
+                    escaped = true
+                } else if char == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            switch char {
+            case "\"":
+                inString = true
+            case "{":
+                if depth == 0 { start = index }
+                depth += 1
+            case "}":
+                if depth > 0 {
+                    depth -= 1
+                    if depth == 0, let start,
+                       let object = decodeJSON(String(text[start...index])) {
+                        latest = object
+                    }
+                }
+            default:
+                break
+            }
+        }
+        return latest
+    }
+
+    private func decodeJSON(_ text: String) -> [String: Any]? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"),
+              let data = trimmed.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) else {
             return nil
         }
@@ -1138,9 +1228,12 @@ private extension AppModel {
     ///
     /// 端口和密钥在这里自己查，不再依赖“状态档先跑过”。旧版靠状态查询把端口写进
     /// openClash.panelPort，一旦那条命令失败、或者切页时顺序不对，/traffic 就打在
-    /// 默认 9090 上、或者带着错的密钥返回 4xx，界面就永远停在 0——
-    /// 这正是“实时流量和内核状态不更新”的直接原因。
+    /// 默认 9090 上、或者带着错的密钥返回 4xx，界面就永远停在 0。
     /// 取数做了三层兜底：带密钥 curl → 不带密钥 curl → wget（部分固件只有 wget）。
+    ///
+    /// /traffic 必须只留**一行**：它是流式的，每秒吐一个 JSON 对象且不断开连接，
+    /// 不截断的话一次会抓到好几行拼在一起（`{"up":1}{"up":2}`），解析必然失败。
+    /// 用 `head -n 1` 拿到第一行就关管道，顺带把耗时从 3 秒压到 1 秒左右。
     var metricsScript: String {
         lowPriority("""
         CURL=$(command -v curl 2>/dev/null)
@@ -1159,11 +1252,11 @@ private extension AppModel {
         echo @@TRAFFIC
         T=""
         if [ -n "$OCPID" ] && [ -n "$CURL" ]; then
-          if [ -n "$SECRET" ]; then T=$($CURL -s -f -m 3 -H "Authorization: Bearer $SECRET" "http://127.0.0.1:$PORT/traffic" 2>/dev/null); fi
-          [ -n "$T" ] || T=$($CURL -s -f -m 3 "http://127.0.0.1:$PORT/traffic" 2>/dev/null)
+          if [ -n "$SECRET" ]; then T=$($CURL -s -N -f -m 2 -H "Authorization: Bearer $SECRET" "http://127.0.0.1:$PORT/traffic" 2>/dev/null | head -n 1); fi
+          [ -n "$T" ] || T=$($CURL -s -N -f -m 2 "http://127.0.0.1:$PORT/traffic" 2>/dev/null | head -n 1)
         fi
         if [ -z "$T" ] && [ -n "$OCPID" ] && [ -n "$WGET" ]; then
-          T=$($WGET -q -O - -T 3 "http://127.0.0.1:$PORT/traffic" 2>/dev/null)
+          T=$($WGET -q -O - -T 2 "http://127.0.0.1:$PORT/traffic" 2>/dev/null | head -n 1)
         fi
         echo "$T"
         echo @@CONN

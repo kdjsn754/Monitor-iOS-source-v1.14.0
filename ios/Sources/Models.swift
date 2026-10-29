@@ -177,6 +177,25 @@ struct FlashInfo {
         max(0, 1 - systemFraction - appFraction)
     }
 
+    /// 三段之和可能和 total 对不上（/rom 是只读的 squashfs，df 报的是整块固件大小，
+    /// /overlay 报的是另一块分区）。按三段自身归一，进度条才不会被撑出边界。
+    private var segmentSum: Double {
+        let sum = Double(systemUsed) + Double(appUsed) + Double(available)
+        return sum > 0 ? sum : 1
+    }
+
+    var systemShare: Double {
+        min(1, max(0, Double(systemUsed) / segmentSum))
+    }
+
+    var appShare: Double {
+        min(1 - systemShare, max(0, Double(appUsed) / segmentSum))
+    }
+
+    var availableShare: Double {
+        max(0, 1 - systemShare - appShare)
+    }
+
     /// 已用字节数：总容量减可用容量，兜底用系统 + 应用之和。
     var usedBytes: UInt64 {
         guard total > 0 else { return 0 }
