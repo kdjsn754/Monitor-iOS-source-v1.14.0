@@ -48,6 +48,68 @@ extension View {
     }
 }
 
+/// 页面大标题，直接画在内容里，不用系统的大标题。
+///
+/// 系统大标题占的位置很死：状态栏 59pt + 导航栏 44pt + 标题，标题顶边要到屏幕
+/// 109pt 才出现，中间那几十 pt 全是空白。自己排之后标题顶边在 63pt 左右，
+/// 省下将近 46pt，也不会再有导航栏那条材质和内容之间的接缝。
+struct PageHeader<Trailing: View>: View {
+    private let title: String
+    private let trailing: Trailing
+
+    init(_ title: String, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(title)
+                .font(.system(size: 30, weight: .bold))
+                .tracking(-0.4)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            trailing
+        }
+        .padding(.top, 2)
+        .padding(.bottom, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension PageHeader where Trailing == EmptyView {
+    init(_ title: String) {
+        self.init(title) { EmptyView() }
+    }
+}
+
+/// 标题右边的小圆按钮（刷新之类），代替原来导航栏右上角的图标。
+struct HeaderButton: View {
+    let systemImage: String
+    let label: String
+    let action: () -> Void
+
+    init(_ systemImage: String, label: String = "刷新", action: @escaping () -> Void) {
+        self.systemImage = systemImage
+        self.label = label
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.blue)
+                .frame(width: 34, height: 34)
+                .background(Color(.tertiarySystemFill), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
 struct GlassProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

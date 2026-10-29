@@ -19,6 +19,8 @@ struct PollSettingsView: View {
         .background(Color.clear)
         .navigationTitle("采集与刷新")
         .navigationBarTitleDisplayMode(.inline)
+        // 根页面把导航栏隐藏了，这里显式要求显示，免得推上来没有返回按钮。
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("恢复默认") {

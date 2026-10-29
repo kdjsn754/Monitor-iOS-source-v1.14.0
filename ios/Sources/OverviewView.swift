@@ -9,27 +9,23 @@ struct OverviewView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 14) {
+                    PageHeader("概览") {
+                        HeaderButton("arrow.clockwise") {
+                            Task { await model.manualRefresh() }
+                        }
+                    }
                     header
                     ForEach(model.visibleModules) { module in
                         moduleView(module)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 20)
             }
             .background(Color.clear)
-            .navigationTitle("概览")
-            // 导航栏背景必须是「默认」的：以前设成 .hidden，栏就成了全透明，
-            // 滚动时内容会直接从标题文字下面穿过去，看起来就是标题被字压住。
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await model.manualRefresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
+            // 标题画在内容里了，导航栏整条不要：留着它状态栏下面会空出一整条。
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 await model.manualRefresh()
             }

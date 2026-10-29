@@ -33,29 +33,26 @@ struct ProxyView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    PageHeader("网络代理") {
+                        HeaderButton("arrow.clockwise") {
+                            Task { await model.manualRefresh() }
+                        }
+                    }
                     heroCard
                     trafficCard
                     runtimeCard
                     configCard
                     accessCard
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 20)
             }
             .background(Color.clear)
-            .navigationTitle("网络代理")
-            // 见 OverviewView：导航栏背景设成 .hidden 会让内容从标题下面穿过去。
-            .toolbarBackground(.visible, for: .navigationBar)
+            // 见 OverviewView：标题画在内容里，导航栏整条不要。
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 await model.manualRefresh()
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await model.manualRefresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
             }
             .onAppear { syncSelectedConfig() }
             .onChange(of: oc.config) { _, _ in syncSelectedConfig() }

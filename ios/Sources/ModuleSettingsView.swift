@@ -56,6 +56,8 @@ struct ModuleSettingsView: View {
         .background(Color.clear)
         .navigationTitle("概览模块")
         .navigationBarTitleDisplayMode(.inline)
+        // 根页面把导航栏隐藏了，这里显式要求显示，免得推上来没有返回按钮。
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("恢复默认") {

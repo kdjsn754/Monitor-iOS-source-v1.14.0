@@ -32,6 +32,11 @@ struct RootView: View {
                     LoginView()
                 }
             }
+            // 连接弹窗盖着的时候，底下的页面一律不吃点击。
+            // 否则能在「正在连接」的弹窗背后把路由器的「…」菜单点开，两个浮层叠在一起。
+            .allowsHitTesting(popupPhase == nil
+                              && !model.reconnecting
+                              && model.activityTitle == nil)
             if let phase = popupPhase {
                 ConnectionPopupView(
                     phase: phase,
