@@ -184,7 +184,9 @@ jobs:
     # 排队时间也算在 job 超时里，所以给足；真正的工时长由下面各 step 卡住
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      # checkout@v5 起改用 Node 24 运行时。v4 是 Node 20，跑起来会有
+      # 「Node.js 20 已被弃用，强制在 Node.js 24 执行」的告警，指的就是这一行。
+      - uses: actions/checkout@v5
 
       # 一步做完：读环境 → 选最新 Xcode → 首次初始化 → 校验 SDK → 定位工程。
       #
@@ -427,8 +429,10 @@ jobs:
             echo "| SHA256 | \`${sha}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # upload-artifact 要到 v6 才是 Node 24 运行时（v4/v5 都还是 Node 20，会继续报那条弃用告警）。
+      # v6 的上传语义和 v4 一致：产物仍打成 zip、同名不可覆盖、if-no-files-found 同义，参数不用改。
       - name: 上传 IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           # 带上运行器名，auto 模式下两个池子各出一份，下哪个都一样
           name: OpenWrtMonitor-unsigned-ipa-${{ matrix.runner }}
@@ -440,7 +444,7 @@ jobs:
       # 所以现在只传日志：失败产物从 8~40MB 降到十几 KB，下载也快。
       - name: 失败时上传日志
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ios-build-failure-${{ matrix.runner }}
           path: ${{ env.IOS_DIR }}/build/archive.log
