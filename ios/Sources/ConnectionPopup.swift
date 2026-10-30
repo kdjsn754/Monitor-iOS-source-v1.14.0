@@ -116,18 +116,20 @@ struct ConnectionPopupView: View {
                     .onAppear { spin = true }
             }
 
-            Image(systemName: iconName)
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(tint)
+            if phase.isConnecting {
+                // 连接中画的就是这台路由器，用和桌面图标同一枚线稿。
+                RouterGlyph(size: 30, tint: tint)
+            } else {
+                Image(systemName: iconName)
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
         }
     }
 
+    /// 连接中已经改用 RouterGlyph，这里只剩「成功 / 失败」两种符号。
     private var iconName: String {
-        switch phase {
-        case .connecting: return "wifi.router"
-        case .connected: return "checkmark"
-        case .failed: return "exclamationmark"
-        }
+        phase.isConnected ? "checkmark" : "exclamationmark"
     }
 
     // MARK: - 步骤

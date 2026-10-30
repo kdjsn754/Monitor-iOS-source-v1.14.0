@@ -200,9 +200,8 @@ struct LoginView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 12) {
-                    Image(systemName: "wifi.router.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(.blue)
+                    // 和桌面图标同一枚线稿（见 RouterGlyph），不再用 SF Symbols 的路由器。
+                    RouterGlyph(size: 30)
                         .frame(width: 54, height: 54)
                         .softTile(.blue, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {

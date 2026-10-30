@@ -81,9 +81,9 @@ struct SettingsView: View {
                             .fill(Color.blue.opacity(0.10))
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .strokeBorder(Color.blue.opacity(0.22), lineWidth: 1)
-                        Image(systemName: "wifi.router.fill")
-                            .font(.system(size: 24, weight: .medium))
-                            .foregroundStyle(.blue)
+                        // 与桌面图标同一枚线稿；24pt 是这套图形的细节下限，
+                        // 再小就只能保留盒子、天线和两道弧了。
+                        RouterGlyph(size: 26)
                     }
                     .frame(width: 58, height: 58)
 
@@ -607,9 +607,11 @@ private struct RouterSwitcherSheet: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(isCurrent ? Color.blue.opacity(0.14) : Color.blue.opacity(0.05))
                             .frame(width: 36, height: 36)
-                        Image(systemName: isCurrent ? "wifi.router.fill" : "wifi.router")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(isCurrent ? Color.blue : Color.secondary)
+                        // 原来靠「实心 / 空心」区分当前连接，线稿没有实心版，
+                        // 改用颜色：当前那台给主色，其余降到次要灰。
+                        // 19pt 是这套图形在 36pt 圆角底里还能看清两道弧的最小尺寸。
+                        RouterGlyph(size: 19,
+                                    tint: isCurrent ? Color.blue : Color.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
@@ -665,17 +667,8 @@ private struct RouterSwitcherSheet: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        .background(
-            isCurrent ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(
-                    isCurrent ? Color.blue.opacity(0.45) : Color.blue.opacity(0.14),
-                    lineWidth: 1
-                )
-        }
+        // 当前连接只靠一圈蓝边标出来，不再铺浅蓝底
+        .rowTile(radius: 13, emphasized: isCurrent)
     }
 }
 

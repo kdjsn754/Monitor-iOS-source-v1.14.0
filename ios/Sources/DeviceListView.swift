@@ -100,10 +100,10 @@ struct DeviceListView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 34)
-        .softTile(.blue, radius: 14)
+        .rowTile(radius: 14)
     }
 
-    /// 一行一块浅色圆角底，和配置选择器里的行同一套：头像 / 名字 + IP·MAC / 铅笔。
+    /// 一行一块白底 + 细边，和配置选择器里的行同一套：头像 / 名字 + IP·MAC / 铅笔。
     private func row(_ device: DeviceInfo) -> some View {
         let name = model.displayName(for: device)
         return Button {
@@ -150,7 +150,7 @@ struct DeviceListView: View {
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            .softTile(.blue, radius: 13)
+            .rowTile(radius: 13)
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
         .buttonStyle(.plain)

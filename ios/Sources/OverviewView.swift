@@ -36,9 +36,7 @@ struct OverviewView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "wifi.router.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(.blue)
+            RouterGlyph(size: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.routerInfo.model.isEmpty ? "OpenWrt" : model.routerInfo.model)
                     .font(.headline)
@@ -361,8 +359,8 @@ struct OverviewView: View {
     ///
     /// 以前这一行是「44pt 浅蓝圆 + 24pt 亮蓝数字 + 浅蓝胶囊」：三种深浅不同的蓝叠在
     /// 一起，而卡片标题里已经有一枚同样的图标，圆里再画一次纯属重复。
-    /// 现在整行做成一块浅色底（和硬件状态里的格子同一种底），数字回归主色文字，
-    /// 全卡只留右侧胶囊一处强调。
+    /// 现在整行是白底 + 一圈细边，数字回归主色文字；右边「查看全部」也不再套浅蓝胶囊，
+    /// 只留蓝色文字和箭头 —— 一行里只强调一处，不再靠铺色块做层级。
     private var devicesContent: some View {
         Button {
             guard !model.devices.isEmpty else { return }
@@ -381,7 +379,7 @@ struct OverviewView: View {
                     }
                     Text(model.devices.isEmpty ? "DHCP 租约里还没有设备" : "DHCP 租约 · 点开可改名")
                         .font(.caption2)
-                        .foregroundStyle(Color(.tertiaryLabel))
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 8)
@@ -394,15 +392,12 @@ struct OverviewView: View {
                     }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.blue)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .softTile(.blue, in: Capsule())
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .softTile(.blue, radius: 14)
+            .rowTile(radius: 14)
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)

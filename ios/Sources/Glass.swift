@@ -85,19 +85,52 @@ extension View {
     }
 }
 
+/// 面板 / 卡片里的「行」：白底 + 一圈细边。
+///
+/// 这些行以前用 `softTile(.blue)`：5% 蓝底 + 15% 蓝边。一行两行还像块面，
+/// 一屏四五行叠起来整片发蓝，跟卡片的白底互相打架，行里的 IP / MAC 也被衬得发蓝，
+/// 看着像「一排提示卡」而不是普通列表。
+/// 现在统一回到白底黑字：填充就是 `systemBackground`（和卡片同色），
+/// 只留一圈 `separator` 细边划出行界；深色模式跟着系统走，不用另配一套色。
+/// `emphasized` 只给「当前选中的那一行」用：不铺蓝底，只把边线换成主色。
+struct RowTileModifier<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var emphasized: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                shape.fill(Color(.systemBackground))
+            }
+            .overlay {
+                shape.strokeBorder(
+                    emphasized ? Color.blue.opacity(0.5) : Color(.separator),
+                    lineWidth: emphasized ? 1.3 : 0.75
+                )
+            }
+    }
+}
+
+extension View {
+    func rowTile<S: InsettableShape>(in shape: S, emphasized: Bool = false) -> some View {
+        modifier(RowTileModifier(shape: shape, emphasized: emphasized))
+    }
+
+    func rowTile(radius: CGFloat = 14, emphasized: Bool = false) -> some View {
+        rowTile(in: RoundedRectangle(cornerRadius: radius, style: .continuous),
+                emphasized: emphasized)
+    }
+}
+
 /// 半屏面板的底色。
 ///
-/// 系统给的 `systemGroupedBackground` 是一整片中性灰，自绘面板铺上去整块发灰。
-/// 这里用「白底 + 一丝主色」，和 App 自己的渐变背景同一个色系，面板就不会显得脏。
+/// 以前是「白底 + 3.5% 主色」，想让面板和 App 渐变背景同一个色系。但行块本身
+/// 也带一层浅蓝底，两层叠起来整片发蓝，黑字压在上面都显灰。
+/// 现在面板回到纯白（跟着系统 background 走），层次全靠行的那一圈细边划分。
 struct SheetSurface: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        ZStack {
-            Color(.systemBackground)
-            Color.blue.opacity(colorScheme == .dark ? 0.10 : 0.035)
-        }
-        .ignoresSafeArea()
+        Color(.systemBackground)
+            .ignoresSafeArea()
     }
 }
 

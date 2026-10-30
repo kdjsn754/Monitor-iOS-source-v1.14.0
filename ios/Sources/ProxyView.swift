@@ -759,17 +759,8 @@ private struct ConfigPickerSheet: View {
             .padding(.vertical, 12)
             // minHeight 兜底：名字长短、有没有标签，都不影响行高
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            .background(
-                selected ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
-                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(
-                        selected ? Color.blue.opacity(0.5) : Color.blue.opacity(0.14),
-                        lineWidth: selected ? 1.2 : 1
-                    )
-            }
+            // 选中只靠那一圈蓝边和左侧的圆点，不再铺一层浅蓝底
+            .rowTile(radius: 13, emphasized: selected)
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
         .buttonStyle(.plain)

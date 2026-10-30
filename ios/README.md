@@ -2,6 +2,18 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.28.4 — 新图标 + App 内路由器图标改成同一枚线稿
+
+- **桌面图标**换成最简的一版：方盒 + 双天线 + 一大一小两道弧 + 面板分缝 + 指示灯。
+  弧线里的第二道（小弧）只到天线之间，不再顶到天线顶端。图形整体上移 38（1024 画布），
+  修掉「上留白多、下留白少」的偏下感。源文件：`design/app-icon.svg`。
+- **新增 `RouterGlyph`**：把图标里同一组 1024 坐标按比例画进任意尺寸，
+  线宽固定 5.9%（不低于 1.25pt）。低于 24pt 自动省掉面板线与指示灯。
+- **替换 5 处 `wifi.router`**：登录页 30pt、概览页头 28pt、设置页路由器卡 26pt、
+  切换连接行 19pt、连接弹窗 30pt。切换连接原来靠实心/空心区分当前项，
+  线稿没有实心版，改用颜色（当前主色、其余次要灰）。
+- 版本 1.28.4 / build 45。
+
 ## v1.28.3 — 三个面板同一套、连接设备/CPU 换色、采集页只留预设
 
 - **「连接设备」面板改成自绘**：去掉 `NavigationStack` + 导航栏「完成」+ 白卡分隔线，
@@ -17,6 +29,10 @@ Android 版的 iOS 原生 SwiftUI 移植。
 - **采集与刷新**：删掉「采集内容」七项清单，加三档预设（灵敏 1s / 标准 2s / 省电 5s），
   加减细调保留。
 - **配置文件面板**：无可应用项时用等高的静态小字代替淡蓝死按钮。
+- **CI 去掉 `actions/cache`**：那步缓存 `build/spm` + `build/DerivedData` 共 1248 MB，
+  不影响出包也不影响包内内容，但每次作业要先拉 1.2GB、改一行 Swift 又要重传一份；
+  整步删除后工作流剩 5 个 step（准备工具链 / 装 XcodeGen / 生成工程 / 归档 / 打包上传）。
+  应用代码零改动。
 - 版本 1.28.3 / build 44。
 
 ## v1.28.2 — 网络代理页的按钮不再「等很久才出来」
@@ -110,7 +126,8 @@ Android 版的 iOS 原生 SwiftUI 移植。
   单独的 `-resolvePackageDependencies`、`-showBuildSettings`（最慢，改成数 pbxproj 里的
   `PRODUCT_NAME` 条数）、`-resultBundlePath`；失败产物只传 `archive.log`。
   新增 `build/spm` + `build/DerivedData` 联合缓存（openssl/ssh2 全是 C 源码，
-  冷编译 1~3 分钟，第二次起复用 .o）；归档去掉 `-quiet` 并加 `-showBuildTimingSummary`。
+  冷编译 1~3 分钟，第二次起复用 .o；v1.28.3 又去掉了，因为 1.2GB 的恢复+保存
+  开销和它省下的时间差不多）；归档去掉 `-quiet` 并加 `-showBuildTimingSummary`。
 - 版本 1.28.0 / build 41。
 
 ## v1.27.0 — CPU/内存并入硬件状态、设备卡只看概括、闪存总量回归
