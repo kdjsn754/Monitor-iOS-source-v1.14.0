@@ -503,21 +503,6 @@ struct LoginView: View {
                     .accessibilityLabel(revealPassword ? "隐藏密码" : "显示密码")
                 }
             }
-            formDivider
-
-            HStack(spacing: 12) {
-                Text("自动登录")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                Toggle("", isOn: Binding(
-                    get: { model.autoLogin },
-                    set: { model.autoLogin = $0 }
-                ))
-                .labelsHidden()
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
         }
         .background(
             Color(.secondarySystemGroupedBackground),

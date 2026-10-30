@@ -54,9 +54,6 @@ final class AppModel: ObservableObject {
     @Published var currentProfileID: UUID?
     @Published var moduleOrder: [OverviewModule] = OverviewModule.allCases
     @Published var hiddenModules: Set<OverviewModule> = []
-    @Published var autoLogin: Bool {
-        didSet { UserDefaults.standard.set(autoLogin, forKey: "autoLogin") }
-    }
     /// 采集配置：现在只有一个全局刷新间隔，改完立即生效。
     @Published var pollConfig: PollConfiguration {
         didSet {
@@ -112,7 +109,6 @@ final class AppModel: ObservableObject {
     private var lastOcTotalDate: Date?
 
     init() {
-        autoLogin = UserDefaults.standard.object(forKey: "autoLogin") as? Bool ?? true
         pollConfig = PollConfiguration.load()
         loadProfiles()
         loadModules()
@@ -208,12 +204,11 @@ final class AppModel: ObservableObject {
         }
         currentProfileID = profile.id
         saveProfiles()
-        if autoLogin {
-            KeychainStore.savePassword(
-                password,
-                account: KeychainStore.passwordAccount(for: profile)
-            )
-        }
+        // 密码一律存：启动时自动连接是默认行为，不再有「记住了但不自动连」这种状态。
+        KeychainStore.savePassword(
+            password,
+            account: KeychainStore.passwordAccount(for: profile)
+        )
         // 保存就保存了：连不上的时候也留在列表里，用户改完再试，
         // 「重试」也有个确定的目标可指。
         await connect(profile: profile, password: password)
@@ -380,7 +375,7 @@ final class AppModel: ObservableObject {
     }
 
     func autoConnectIfPossible() async {
-        guard autoLogin, !connected, let profile = currentProfile,
+        guard !connected, let profile = currentProfile,
               let password = KeychainStore.loadPassword(
                 account: KeychainStore.passwordAccount(for: profile)
               ) else { return }
@@ -419,12 +414,10 @@ final class AppModel: ObservableObject {
         profiles[index] = updated
         currentProfileID = updated.id
         saveProfiles()
-        if autoLogin {
-            KeychainStore.savePassword(
-                password,
-                account: KeychainStore.passwordAccount(for: updated)
-            )
-        }
+        KeychainStore.savePassword(
+            password,
+            account: KeychainStore.passwordAccount(for: updated)
+        )
         await connect(profile: updated, password: password)
     }
 

@@ -131,7 +131,7 @@ struct SettingsView: View {
                 actionTile("新建连接", icon: "plus") {
                     openEditor(nil)
                 }
-                actionTile("编辑当前连接", icon: "pencil",
+                actionTile("编辑连接", icon: "pencil",
                            enabled: model.currentProfile != nil) {
                     openEditor(model.currentProfile ?? model.profiles.first)
                 }
@@ -157,8 +157,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canOpenWeb)
-
-            autoLoginRow
 
             // 错误提示：8 秒自动消失，也能点叉立刻收掉。
             // 以前只在「下一次连接成功」时才清，连不上的红字会一直挂在设置页上，
@@ -201,40 +199,24 @@ struct SettingsView: View {
                 // 不框住的话三个盒子就一高一矮。这里统一给 20pt 的框，高度就一致了。
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.blue)
+                    // 一律用 label 色而不是 .primary：白底上要的是纯黑，
+                    // `.primary` 在某些容器里会被降级成一级灰。
+                    .foregroundStyle(Color(uiColor: .label))
                     .frame(height: 20)
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color(uiColor: .label))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
-            .softTile(.blue, radius: 14)
+            .rowTile(radius: 14)
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
-    }
-
-    private var autoLoginRow: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "key.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 18)
-            Text("启动时自动连接")
-                .font(.footnote)
-            Spacer(minLength: 6)
-            Toggle("", isOn: Binding(
-                get: { model.autoLogin },
-                set: { model.autoLogin = $0 }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-        }
     }
 
     /// 图标角标：正在连新连接时旧会话还在，别让绿点骗人。
@@ -333,59 +315,26 @@ struct SettingsView: View {
             NavigationLink {
                 PollSettingsView()
             } label: {
-                VStack(spacing: 8) {
-                    HStack(spacing: 10) {
-                        Text("每 \(Int(model.pollSeconds.rounded())) 秒")
-                            .font(.subheadline.weight(.semibold))
-                            .monospacedDigit()
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text("\(PollItem.allCases.count) 项数据，只采当前页面")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                        Spacer(minLength: 4)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    HStack(spacing: 6) {
-                        ForEach(AppPage.allCases) { page in
-                            pageChip(page)
-                        }
-                    }
+                HStack(spacing: 10) {
+                    Text("每 \(Int(model.pollSeconds.rounded())) 秒")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text("\(PollItem.allCases.count) 项数据，只采当前页面")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-    }
-
-    /// 一眼看出「哪一页采哪些数据」，比之前三档的格子干净得多。
-    private func pageChip(_ page: AppPage) -> some View {
-        let count = model.pollConfig.items(on: page).count
-        let active = page == model.activePage && count > 0
-        return HStack(spacing: 4) {
-            Image(systemName: page.icon)
-                .font(.system(size: 9, weight: .semibold))
-            Text(count > 0 ? "\(page.title) \(count) 项" : "\(page.title) 不采集")
-                .font(.system(size: 10))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            active ? Color.blue.opacity(0.16) : Color.blue.opacity(0.05),
-            in: Capsule()
-        )
-        .overlay {
-            Capsule()
-                .strokeBorder(active ? Color.blue.opacity(0.4) : Color.blue.opacity(0.12),
-                              lineWidth: 1)
-        }
-        .foregroundStyle(active ? Color.blue : Color.secondary)
     }
 
     // MARK: - 关于
@@ -418,10 +367,10 @@ struct SettingsView: View {
     }
 
     /// 版本号从包里读，别在界面上再抄一份——抄的那份早晚和工程文件对不上。
+    /// 只显示 1.28.x 这种主版本号。build 号（括号里那串）只对开发者有意义，
+    /// 「关于」里挂着反而让人以为要跟着它走。
     private var appVersion: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        return build.map { "\(short) (\($0))" } ?? short
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
 
     /// 兼容窗口的判断：逻辑尺寸比「原生像素 ÷ 缩放」小一圈，就是被系统塞进旧尺寸窗口了。
