@@ -207,8 +207,7 @@ struct MainTabs: View {
 /// 胶囊宽 274、高 62、离屏幕物理底边 21、内边距 4、三格等分；
 /// 选中项铺一块 `systemFill` 胶囊，图标换实心、文字加粗——
 /// 也就是系统 App 那种「只有一个选中项有底色」的写法，不再给图标上蓝色。
-struct AppTabBar: View {
-    @Binding var selection: Int
+struct AppTabBar: View {    @Binding var selection: Int
 
     private enum Metrics {
         static let width: CGFloat = 274      // 胶囊总宽
@@ -244,14 +243,16 @@ struct AppTabBar: View {
             selection = index
         } label: {
             VStack(spacing: 4) {
-                // 图标和文字都跟系统底栏一样用主色：选中与未选中的差别靠
-                // 「实心/空心 + 有没有底色 + 字重」来表达，不靠换色。
-                TabGlyph(kind: item.glyph, filled: isSelected)
+                // 图标和文字都用「具体的黑/白」而不是 `.primary`：玻璃底栏会把
+                // 层级色降级渲染，选中项的实心图标曾经因此变成 tertiary 那一档的灰。
+                TabGlyph(kind: item.glyph,
+                         filled: isSelected,
+                         tint: Color(uiColor: .label))
                     .frame(width: Metrics.icon, height: Metrics.icon)
                 Text(item.title)
                     .font(.system(size: Metrics.label, weight: isSelected ? .semibold : .medium))
             }
-            .foregroundStyle(Color.primary)
+            .foregroundStyle(Color(uiColor: .label))
             .frame(maxWidth: .infinity)
             .frame(height: Metrics.height - Metrics.inset * 2)
             .background {
@@ -262,9 +263,21 @@ struct AppTabBar: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TabBarButtonStyle())
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+}
+
+/// 底栏按钮：按下时只轻微缩小，**不变淡**。
+///
+/// `.plain` 在按下时会把 label 整体压低不透明度，黑色图标于是变成灰的——
+/// 底栏图标本来就小，一淡就像「没选中」或「被禁用」，切换的那一下观感很差。
+private struct TabBarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

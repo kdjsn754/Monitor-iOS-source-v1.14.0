@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// 底部导航栏的三枚图标。
 ///
@@ -7,6 +8,7 @@ import SwiftUI
 /// 未选中画空心、选中换实心（实心不是把空心加粗，而是另一套闭合路径）。
 /// 图案沿用原来的三枚——网格 / 盾牌 / 齿轮——只是重新描了一遍，
 /// 让它们和别家 App 底栏的图标一样「笔画一致、边角圆润、选中变实」。
+/// 实心版都留了「洞」：齿轮的中心孔、盾牌里的对勾，避免选中后只剩一团纯色。
 enum TabGlyphKind {
     case overview
     case proxy
@@ -16,20 +18,28 @@ enum TabGlyphKind {
 struct TabGlyph: View {
     let kind: TabGlyphKind
     var filled: Bool = false
+    /// 墨色。
+    ///
+    /// 不用 `.primary` / `.secondary` 这类层级色：实测在 iOS 26 的玻璃底栏里，
+    /// 选中态的实心图标被渲染成了 tertiary 那一档的灰（#AFAFB1），
+    /// 和旁边纯黑的空心图标完全不是同一个颜色。这里直接给具体颜色（label 黑/白），
+    /// 绕开层级样式的推断。
+    var tint: Color = Color(uiColor: .label)
     /// 线宽（设计框 24 单位下的值，实际按尺寸等比缩放）
     var lineWidth: CGFloat = 1.7
 
     var body: some View {
         GeometryReader { geo in
             let scale = min(geo.size.width, geo.size.height) / 24
-            let shape = Self.path(kind, scale: scale)
+            let shape = Self.path(kind, scale: scale, filled: filled)
             if filled {
-                // even-odd：齿轮中间的孔是「挖」出来的，不是叠一个白圆（深色模式下会穿帮）
-                shape.fill(style: FillStyle(eoFill: true))
+                // even-odd：齿轮的中心孔、盾牌的对勾都是「挖」出来的，
+                // 不是叠一个白圆/白勾（深色模式下会穿帮）
+                shape.fill(tint, style: FillStyle(eoFill: true))
             } else {
-                shape.stroke(style: StrokeStyle(lineWidth: lineWidth * max(scale, 0.01),
-                                                lineCap: .round,
-                                                lineJoin: .round))
+                shape.stroke(tint, style: StrokeStyle(lineWidth: lineWidth * max(scale, 0.01),
+                                                      lineCap: .round,
+                                                      lineJoin: .round))
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -37,11 +47,11 @@ struct TabGlyph: View {
 
     // MARK: - 路径
 
-    private static func path(_ kind: TabGlyphKind, scale: CGFloat) -> Path {
+    private static func path(_ kind: TabGlyphKind, scale: CGFloat, filled: Bool) -> Path {
         var p: Path
         switch kind {
         case .overview: p = overviewPath()
-        case .proxy: p = proxyPath()
+        case .proxy: p = proxyPath(filled: filled)
         case .settings: p = settingsPath()
         }
         return p.applying(CGAffineTransform(scaleX: scale, y: scale))
@@ -69,7 +79,10 @@ struct TabGlyph: View {
     }
 
     /// 代理：盾牌。上边两角圆角、两侧直下、底部收成一个圆头的尖。
-    private static func proxyPath() -> Path {
+    ///
+    /// 选中态不是简单填满：纯色盾缩到 23pt 就只剩一团黑，分不清是盾还是水滴。
+    /// 所以实心版在中间用 even-odd 挖一枚对勾（安全/通过的含义也正好对得上「代理」）。
+    private static func proxyPath(filled: Bool) -> Path {
         var p = Path()
         let half: CGFloat = 9.15      // 半宽
         let top: CGFloat = 2.0
@@ -91,6 +104,18 @@ struct TabGlyph: View {
                    control1: CGPoint(x: 12 - half * 0.52, y: tip - 1.5),
                    control2: CGPoint(x: 12 - half, y: shoulder + 4.3))
         p.closeSubpath()
+
+        if filled {
+            // 对勾先描成带宽度的轮廓，再并进主路径交给 even-odd 挖空；
+            // 直接手算带状多边形的话，两头和拐点的圆角要另外补圆，容易画歪。
+            var check = Path()
+            check.move(to: CGPoint(x: 8.80, y: 11.25))
+            check.addLine(to: CGPoint(x: 11.10, y: 13.60))
+            check.addLine(to: CGPoint(x: 15.50, y: 8.90))
+            p.addPath(check.strokedPath(StrokeStyle(lineWidth: 2.1,
+                                                    lineCap: .round,
+                                                    lineJoin: .round)))
+        }
         return p
     }
 
