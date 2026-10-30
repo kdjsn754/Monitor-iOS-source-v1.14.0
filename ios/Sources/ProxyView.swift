@@ -725,19 +725,14 @@ private struct ConfigPickerSheet: View {
                 }
 
                 Spacer(minLength: 4)
-
-                if selected, !isApplied {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.blue)
-                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             // minHeight 兜底：名字长短、有没有标签，都不影响行高
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            // 选中只靠左侧那圈实心蓝点 + 右侧勾，不再铺一层淡蓝底：
-            // 整行染色在卡片里像一条高亮错误行，和这套白卡不是一个材质。
+            // 选中只靠左侧那枚圆点：实心蓝 = 选中，灰细圈 = 未选中。
+            // 以前还叠过一层淡蓝底、行尾再加一枚蓝勾，一行三处强调，
+            // 在白卡里看着像高亮错误行；两处都删掉了，单选点本身就是最标准的表达。
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
