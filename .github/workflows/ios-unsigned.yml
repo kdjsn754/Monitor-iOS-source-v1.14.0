@@ -341,12 +341,37 @@ jobs:
         run: |
           set -u
           xcodegen generate
+          test -d OpenWrtMonitor.xcodeproj || { echo "::error::xcodegen 没生成工程"; exit 1; }
+          pbx=OpenWrtMonitor.xcodeproj/project.pbxproj
+
+          # ── 自愈：产物名 ────────────────────────────────────────────────
+          # 仓库里的 project.yml 若是旧版（没有 PRODUCT_NAME），生成的工程里就缺这一项，
+          # 归档产物会变成 Applications/.app 并报「Multiple commands produce」。
+          # 这里不依赖那个文件，直接把它补进生成的工程：锚点是 target 里的
+          # PRODUCT_BUNDLE_IDENTIFIER，位置稳定。
+          if grep -q 'PRODUCT_NAME' "$pbx"; then
+            echo "工程里已有 PRODUCT_NAME：$(grep -m1 -o 'PRODUCT_NAME = [^;]*' "$pbx")"
+          else
+            echo "::warning::生成出来的工程里没有 PRODUCT_NAME（仓库的 ios/project.yml 可能是旧版），这里自动补上"
+            perl -0pi -e 's/(\n(\s*)PRODUCT_BUNDLE_IDENTIFIER = com\.catmint\.openwrtmonitor;)/$1\n$2PRODUCT_NAME = OpenWrtMonitor;/g' "$pbx"
+            grep -m3 -o 'PRODUCT_NAME = [^;]*' "$pbx" || true
+          fi
+
+          # ── 自愈：Info.plist 别同时当资源 ──────────────────────────────
+          # 它已经由 info: 生成并作为 INFOPLIST_FILE 使用；如果旧版 project.yml 没写
+          # excludes，它还会被塞进 Copy Bundle Resources，于是报
+          # 「Multiple commands produce .../Info.plist」。删掉相册里那两条引用即可。
+          if grep -q '/\* Info\.plist in Resources \*/' "$pbx"; then
+            echo "::warning::Info.plist 被当成了资源，删掉这两条引用（它只应作为 INFOPLIST_FILE）"
+            perl -ni -e 'print unless m{/\* Info\.plist in Resources \*/}' "$pbx"
+          fi
+          echo "Resources 阶段里还有没有 Info.plist：$(grep -c '/\* Info\.plist in Resources \*/' "$pbx" || true)"
+
           # -list 只是列 scheme，但如果 Xcode 组件没初始化好，它同样会卡；
           # 列不出来不影响后面归档，所以超时就跳过，不拖住整条流水线。
           perl -e 'alarm shift; exec @ARGV' 240 \
             xcodebuild -list -project OpenWrtMonitor.xcodeproj \
             || echo "::warning::xcodebuild -list 超时或失败，跳过（不影响归档）"
-          test -d OpenWrtMonitor.xcodeproj || { echo "::error::xcodegen 没生成工程"; exit 1; }
 
       - name: 缓存 Swift 包
         continue-on-error: true
@@ -375,21 +400,28 @@ jobs:
         timeout-minutes: 8
         run: |
           set -u
+          common="-project OpenWrtMonitor.xcodeproj -scheme OpenWrtMonitor \
+                  -configuration Release -sdk iphoneos \
+                  -destination generic/platform=iOS"
+          # shellcheck disable=SC2086
+          raw="$(perl -e 'alarm shift; exec @ARGV' 420 \
+            xcodebuild -showBuildSettings $common 2>/dev/null || true)"
+          echo "--- 工程原样的关键设置 ---"
+          echo "$raw" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
+
+          # 归档命令会带 PRODUCT_NAME=OpenWrtMonitor 这个覆盖值，所以这里也带上，
+          # 校验的才是「真正会被用来归档」的那份设置。
+          # shellcheck disable=SC2086
           out="$(perl -e 'alarm shift; exec @ARGV' 420 \
-            xcodebuild -showBuildSettings \
-              -project OpenWrtMonitor.xcodeproj \
-              -scheme OpenWrtMonitor \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' 2>/dev/null || true)"
-          echo "--- 关键构建设置 ---"
-          echo "$out" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
+            xcodebuild -showBuildSettings $common PRODUCT_NAME=OpenWrtMonitor 2>/dev/null || true)"
+          echo "--- 加上归档时的覆盖值之后 ---"
+          echo "$out" | grep -E '^ *(PRODUCT_NAME|EXECUTABLE_NAME) = ' || echo "（一条都没取到）"
           pname="$(echo "$out" | awk -F' = ' '/^ *PRODUCT_NAME = /{print $2; exit}' | tr -d '[:space:]')"
           if [ -z "$pname" ]; then
-            echo "::error::PRODUCT_NAME 是空的。这样归档产物会变成 Applications/.app 并触发「Multiple commands produce」。请在 ios/project.yml 的 settings.base 里写死 PRODUCT_NAME: OpenWrtMonitor。"
+            echo "::error::连 PRODUCT_NAME=OpenWrtMonitor 这个命令行覆盖都没生效，工程文件可能已损坏。请把生成的 ios/OpenWrtMonitor.xcodeproj 删掉重跑，或检查 project.yml。"
             exit 1
           fi
-          echo "PRODUCT_NAME = ${pname}（正常）"
+          echo "PRODUCT_NAME = ${pname}（归档时会用它，正常）"
 
       - name: 构建（不签名）
         working-directory: ${{ env.IOS_DIR }}
