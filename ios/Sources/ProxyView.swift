@@ -22,7 +22,10 @@ struct ProxyView: View {
     private var statusDetail: String {
         if !oc.installed { return "未检测到 OpenClash" }
         if !oc.running { return "服务已停止，启动后可查看流量" }
-        return "面板端口 \(oc.panelPort)"
+        // 面板地址已经挪到卡片下半部分，这里改说「当前跑的是哪份配置」，
+        // 不再重复一遍端口号。
+        let name = oc.config.isEmpty ? "" : (oc.config as NSString).lastPathComponent
+        return name.isEmpty ? "运行中" : "配置 \(name)"
     }
 
     var body: some View {
@@ -38,7 +41,6 @@ struct ProxyView: View {
                     trafficCard
                     runtimeCard
                     configCard
-                    panelCard
                     accessCard
                 }
                 .padding(.horizontal, 16)
@@ -70,7 +72,7 @@ struct ProxyView: View {
         }
     }
 
-    // MARK: - 状态与操作
+    // MARK: - 状态、操作与控制面板
 
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -119,6 +121,12 @@ struct ProxyView: View {
                 }
                 .disabled(model.busy)
                 .opacity(model.busy ? 0.55 : 1)
+
+                // 控制面板并进这张卡：以前它自己占一张卡，标题、图标、状态跟这里
+                // 几乎是重复的。现在只隔一条细线，上半是「状态与操作」，下半是「面板入口」。
+                Divider().opacity(0.5)
+
+                panelBlock
             } else {
                 Text("确认路由器已安装 OpenClash 插件，且 SSH 账号有权限读取 /etc/config/openclash。")
                     .font(.caption2)
@@ -128,6 +136,66 @@ struct ProxyView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+    }
+
+    /// 面板：一行「图标 + 标题 + 状态标签 + 地址」，下面一条整宽主按钮。
+    private var panelBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 34, height: 34)
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.blue)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("控制面板")
+                            .font(.subheadline.weight(.semibold))
+                        Text(canOpenPanel ? "可打开" : "未就绪")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                (canOpenPanel ? Color.green : Color.orange).opacity(0.14),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(canOpenPanel ? Color.green : Color.orange)
+                    }
+                    Text(panelAddress)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Button {
+                showPanel = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "safari.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("打开控制面板")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    canOpenPanel ? Color.blue : Color(.systemGray4),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .foregroundStyle(canOpenPanel ? Color.white : Color(.systemGray))
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpenPanel)
+        }
     }
 
     private var statusPill: some View {
@@ -387,70 +455,6 @@ struct ProxyView: View {
     private var configDetail: String {
         guard !oc.configs.isEmpty else { return "没有可用配置" }
         return "共 \(oc.configs.count) 个配置文件"
-    }
-
-    // MARK: - 控制面板
-
-    /// 单独一张卡：以前它挤在别人卡片最底下，只剩一个 12pt 字的「打开」小胶囊，
-    /// 又小又难点。现在有图标、地址、状态，整条 44pt 高的主按钮。
-    private var panelCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.blue.opacity(0.12))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.blue)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("控制面板")
-                        .font(.subheadline.weight(.semibold))
-                    Text(panelAddress)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer(minLength: 6)
-
-                Text(canOpenPanel ? "可打开" : "未就绪")
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        (canOpenPanel ? Color.green : Color.orange).opacity(0.14),
-                        in: Capsule()
-                    )
-                    .foregroundStyle(canOpenPanel ? Color.green : Color.orange)
-            }
-
-            Button {
-                showPanel = true
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "safari.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("打开控制面板")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(
-                    canOpenPanel ? Color.blue : Color(.systemGray4),
-                    in: Capsule()
-                )
-                .foregroundStyle(canOpenPanel ? Color.white : Color(.systemGray))
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canOpenPanel)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
     }
 
     private var canOpenPanel: Bool {

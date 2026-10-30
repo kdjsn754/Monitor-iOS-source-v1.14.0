@@ -8,6 +8,10 @@ import SwiftUI
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    /// 正在改名的设备 + 输入框内容。点一行就进这里。
+    @State private var renaming: DeviceInfo?
+    @State private var showRename = false
+    @State private var draftName = ""
 
     var body: some View {
         NavigationStack {
@@ -43,6 +47,18 @@ struct DeviceListView: View {
                         .font(.subheadline.weight(.semibold))
                 }
             }
+            .alert("重命名设备", isPresented: $showRename, presenting: renaming) { device in
+                TextField("设备名称", text: $draftName)
+                Button("保存") {
+                    model.setDeviceAlias(draftName, for: device)
+                }
+                Button("恢复原名", role: .destructive) {
+                    model.setDeviceAlias("", for: device)
+                }
+                Button("取消", role: .cancel) {}
+            } message: { device in
+                Text("原名 \(device.name) · \(device.ip)。改名只存在这台手机上，路由器那边不受影响。")
+            }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -61,7 +77,7 @@ struct DeviceListView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(model.devices.count) 台设备")
                     .font(.headline)
-                Text("来自路由器 DHCP 租约，不含静态 IP 设备")
+                Text("来自路由器 DHCP 租约 · 点一行可改名称")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -86,36 +102,49 @@ struct DeviceListView: View {
     }
 
     private func row(_ device: DeviceInfo) -> some View {
-        HStack(spacing: 12) {
-            Text(initial(device))
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.blue)
-                .frame(width: 32, height: 32)
-                .background(Color.blue.opacity(0.12), in: Circle())
+        let name = model.displayName(for: device)
+        return Button {
+            draftName = model.hasAlias(device) ? name : device.name
+            renaming = device
+            showRename = true
+        } label: {
+            HStack(spacing: 12) {
+                Text(initial(name))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 32, height: 32)
+                    .background(Color.blue.opacity(0.12), in: Circle())
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(device.name)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Text(device.ip)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("\(device.ip) · \(device.mac.uppercased())")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "pencil")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 28, height: 28)
+                    .background(Color.blue.opacity(0.10), in: Circle())
             }
-
-            Spacer(minLength: 8)
-
-            Text(device.mac.uppercased())
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 11)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name)，\(device.ip)，点按重命名")
     }
 
-    private func initial(_ device: DeviceInfo) -> String {
-        guard let first = device.name.first, first.isLetter || first.isNumber else {
+    private func initial(_ name: String) -> String {
+        guard let first = name.first, first.isLetter || first.isNumber else {
             return "?"
         }
         return String(first).uppercased()

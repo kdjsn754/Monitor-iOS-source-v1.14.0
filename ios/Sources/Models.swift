@@ -167,18 +167,6 @@ struct FlashInfo {
     var usedFraction: Double {
         total > 0 ? min(1, Double(usedBytes) / Double(total)) : 0
     }
-
-    private func share(_ bytes: UInt64) -> Double {
-        guard total > 0 else { return 0 }
-        return min(1, max(0, Double(bytes) / Double(total)))
-    }
-
-    var systemShare: Double { share(systemUsed) }
-
-    /// 应用段不能越界：两段加起来最多占满整条。
-    var appShare: Double { min(1 - systemShare, share(appUsed)) }
-
-    var availableShare: Double { max(0, 1 - systemShare - appShare) }
 }
 
 /// 速度曲线上的一个点。只保留画图要用的两个值，

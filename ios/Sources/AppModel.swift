@@ -29,6 +29,8 @@ final class AppModel: ObservableObject {
     @Published var flashInfo = FlashInfo()
     @Published var routerInfo = RouterInfo()
     @Published var devices: [DeviceInfo] = []
+    /// 自定义设备名：键是 MAC（租约重新下发时 IP 会变，MAC 不会），没 MAC 才退回 IP。
+    @Published var deviceAliases: [String: String] = [:]
 
     @Published var openClash = OpenClashInfo()
     @Published var ocMetrics = OpenClashMetrics()
@@ -100,6 +102,43 @@ final class AppModel: ObservableObject {
         pollConfig = PollConfiguration.load()
         loadProfiles()
         loadModules()
+        loadDeviceAliases()
+    }
+
+    // MARK: - 设备别名
+
+    private func aliasKey(_ device: DeviceInfo) -> String {
+        let mac = device.mac.trimmingCharacters(in: .whitespaces).uppercased()
+        return mac.isEmpty ? device.ip : mac
+    }
+
+    /// 列表里显示的名字：改过就用自定义的，没改过就是租约里的主机名。
+    func displayName(for device: DeviceInfo) -> String {
+        let custom = deviceAliases[aliasKey(device)]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return custom.isEmpty ? device.name : custom
+    }
+
+    func hasAlias(_ device: DeviceInfo) -> Bool {
+        !(deviceAliases[aliasKey(device)] ?? "").isEmpty
+    }
+
+    /// 传空串（或与原名相同）就是恢复 DHCP 里的名字。
+    func setDeviceAlias(_ name: String, for device: DeviceInfo) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = aliasKey(device)
+        if trimmed.isEmpty || trimmed == device.name {
+            deviceAliases.removeValue(forKey: key)
+        } else {
+            deviceAliases[key] = trimmed
+        }
+        UserDefaults.standard.set(deviceAliases, forKey: "deviceAliases")
+    }
+
+    private func loadDeviceAliases() {
+        if let stored = UserDefaults.standard.dictionary(forKey: "deviceAliases") {
+            deviceAliases = stored.compactMapValues { $0 as? String }
+        }
     }
 
     var currentProfile: RouterProfile? {

@@ -155,48 +155,35 @@ struct OverviewView: View {
         let info = model.flashInfo
         return Group {
             if info.hasData {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .top, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                Text(formatFlashBytes(info.usedBytes))
-                                    .font(.system(size: 23, weight: .semibold, design: .rounded))
-                                    .monospacedDigit()
-                                Text("已用")
-                                    .font(.caption)
+                VStack(alignment: .leading, spacing: 12) {
+                    // 和 CPU / 内存同一套圆环：中间是已用百分比，
+                    // 右边只留「已用 / 剩余」两个数字加总容量，
+                    // 不再把闪存拆成系统、应用、可用三段去讲。
+                    HStack(alignment: .center, spacing: 16) {
+                        RingGauge(
+                            percent: info.usedFraction * 100,
+                            accent: flashTone(info.usedFraction),
+                            diameter: 98,
+                            caption: "已用",
+                            lineWidth: 11
+                        )
+
+                        VStack(spacing: 11) {
+                            flashRow("已用", bytes: info.usedBytes,
+                                     color: flashTone(info.usedFraction))
+                            flashRow("剩余", bytes: info.available,
+                                     color: Color(.systemGray3), hollow: true)
+                            Divider().opacity(0.5)
+                            HStack(spacing: 6) {
+                                Text("总容量")
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
+                                Spacer(minLength: 4)
+                                Text(formatFlashBytes(info.total))
+                                    .font(.caption.weight(.medium))
+                                    .monospacedDigit()
                             }
-                            Text("共 \(formatFlashBytes(info.total)) · 剩余 \(formatFlashBytes(info.available))")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
                         }
-
-                        Spacer(minLength: 4)
-
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("\(Int((info.usedFraction * 100).rounded()))%")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                                .monospacedDigit()
-                                .foregroundStyle(flashTone(info.usedFraction))
-                            Text("占用率")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    FlashCompositionBar(info: info)
-
-                    VStack(spacing: 9) {
-                        FlashLegendRow(title: "系统占用", bytes: info.systemUsed,
-                                       share: info.systemShare, color: Color(.systemGray))
-                        FlashLegendRow(title: "应用程序", bytes: info.appUsed,
-                                       share: info.appShare, color: .blue)
-                        FlashLegendRow(title: "可用空间", bytes: info.available,
-                                       share: info.availableShare,
-                                       color: Color(.systemGray3), hollow: true)
                     }
 
                     if info.usedFraction >= 0.9 {
@@ -223,6 +210,33 @@ struct OverviewView: View {
         }
     }
 
+    /// 闪存的一行：色点（剩余是空心）→ 名称 → 容量数字。
+    private func flashRow(_ title: String, bytes: UInt64,
+                          color: Color, hollow: Bool = false) -> some View {
+        HStack(spacing: 7) {
+            Group {
+                if hollow {
+                    Circle().strokeBorder(color, lineWidth: 1.5)
+                } else {
+                    Circle().fill(color)
+                }
+            }
+            .frame(width: 8, height: 8)
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 6)
+
+            Text(formatFlashBytes(bytes))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
     /// 占用低于 90% 用蓝色，90% 起转橙，97% 起转红——和进度条、百分比同一套颜色。
     private func flashTone(_ used: Double) -> Color {
         if used >= 0.97 { return .red }
@@ -233,32 +247,103 @@ struct OverviewView: View {
     private var hardwareContent: some View {
         HStack(spacing: 12) {
             hardwareTile(
-                icon: "thermometer.medium",
+                icon: temperatureIcon,
                 title: "温度",
                 value: model.stats.temperature.map { String(format: "%.1f °C", $0) } ?? "无传感器",
-                color: .orange
+                color: temperatureTone,
+                badge: temperatureBadge
             )
             hardwareTile(
-                icon: "fanblades",
+                icon: fanIcon,
                 title: "风扇",
                 value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
-                color: .teal
+                color: fanTone,
+                badge: fanBadge
             )
         }
     }
 
-    private func hardwareTile(icon: String, title: String, value: String, color: Color) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.caption2).foregroundStyle(.secondary)
-                Text(value).font(.subheadline.weight(.semibold))
+    // 图标跟着读数走：温度计低/中/高三档，风扇叶轮从细到实心、颜色由青转橙，
+    // 一眼能看出「凉/热」「慢/快」，不用先读数字。
+
+    private var temperatureIcon: String {
+        guard let t = model.stats.temperature else { return "thermometer.medium" }
+        if t >= 70 { return "thermometer.high" }
+        if t <= 40 { return "thermometer.low" }
+        return "thermometer.medium"
+    }
+
+    private var temperatureTone: Color {
+        guard let t = model.stats.temperature else { return Color(.systemGray) }
+        if t >= 70 { return .red }
+        if t >= 55 { return .orange }
+        return .teal
+    }
+
+    private var temperatureBadge: String? {
+        guard let t = model.stats.temperature else { return nil }
+        if t >= 70 { return "偏高" }
+        if t >= 55 { return "温热" }
+        return nil
+    }
+
+    /// 风扇图标跟着转速换：静止/低速是细叶轮，中速换成实心叶轮，高速干脆换成风线，
+    /// 配合下面的「低速 / 中速 / 高速」小标签，扫一眼就知道转得多厉害。
+    private var fanIcon: String {
+        guard let rpm = model.stats.fanRPM, rpm > 0 else { return "fanblades" }
+        if rpm >= 2400 { return "wind" }
+        if rpm >= 1200 { return "fanblades.fill" }
+        return "fanblades"
+    }
+
+    private var fanTone: Color {
+        guard let rpm = model.stats.fanRPM, rpm > 0 else { return Color(.systemGray) }
+        if rpm >= 2400 { return .orange }
+        if rpm >= 1200 { return .teal }
+        return .mint
+    }
+
+    private var fanBadge: String? {
+        guard let rpm = model.stats.fanRPM else { return nil }
+        if rpm <= 0 { return "静止" }
+        if rpm >= 2400 { return "高速" }
+        if rpm >= 1200 { return "中速" }
+        return "低速"
+    }
+
+    private func hardwareTile(icon: String, title: String, value: String,
+                              color: Color, badge: String? = nil) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(color.opacity(0.12))
+                    .frame(width: 36, height: 36)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(color)
             }
-            Spacer()
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(color)
+                    }
+                }
+                Text(value)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(10)
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
     }
 
@@ -279,7 +364,7 @@ struct OverviewView: View {
             // 用 IP 当标识：DeviceInfo 每轮都重建，UUID 每次都变，会让这几行每 2 秒整体换新。
             ForEach(Array(model.devices.prefix(4).enumerated()), id: \.element.ip) { _, device in
                 HStack {
-                    Text(device.name)
+                    Text(model.displayName(for: device))
                         .font(.caption)
                         .lineLimit(1)
                     Spacer()
@@ -344,96 +429,6 @@ struct InfoRow: View {
                 .minimumScaleFactor(0.8)
         }
         .padding(.vertical, 9)
-    }
-}
-
-/// 一条横向"容量条"：系统占用（中性灰）+ 应用程序（蓝）作为已用部分，
-/// 剩下的是轨道本身，也就是可用空间。两段之间留 2pt 缝隙，边界比纯色拼接清楚。
-private struct FlashCompositionBar: View {
-    let info: FlashInfo
-
-    private var systemColor: Color { Color(.systemGray) }
-    private var appColor: Color { .blue }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let width = max(0, proxy.size.width)
-            let systemWidth = width * CGFloat(info.systemShare)
-            let appWidth = width * CGFloat(info.appShare)
-            let gap: CGFloat = (systemWidth > 3 && appWidth > 3) ? 2 : 0
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color(.systemGray4))
-
-                HStack(spacing: gap) {
-                    if systemWidth > 0 {
-                        Rectangle()
-                            .fill(systemColor)
-                            .frame(width: systemWidth)
-                    }
-                    if appWidth > 0 {
-                        Rectangle()
-                            .fill(appColor)
-                            .frame(width: appWidth)
-                    }
-                }
-                .frame(width: width, alignment: .leading)
-            }
-            .clipShape(Capsule())
-            .overlay {
-                Capsule()
-                    .strokeBorder(Color(.separator).opacity(0.45), lineWidth: 0.5)
-            }
-        }
-        .frame(height: 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("已用 \(Int((info.usedFraction * 100).rounded()))%，共 \(formatFlashBytes(info.total))")
-    }
-}
-
-/// 图例一行：色点（可用空间是空心点）→ 名称 → 占比 → 容量。
-/// 占比用次要色、容量用主色，避免整行灰成一团看不清。
-private struct FlashLegendRow: View {
-    let title: String
-    let bytes: UInt64
-    let share: Double
-    let color: Color
-    var hollow = false
-
-    private var percent: Int {
-        Int((max(0, min(1, share)) * 100).rounded())
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Group {
-                if hollow {
-                    Circle().strokeBorder(color, lineWidth: 1.5)
-                } else {
-                    Circle().fill(color)
-                }
-            }
-            .frame(width: 8, height: 8)
-
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-
-            Spacer(minLength: 6)
-
-            Text("\(percent)%")
-                .font(.caption.weight(.medium))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 38, alignment: .trailing)
-
-            Text(formatFlashBytes(bytes))
-                .font(.subheadline.weight(.medium))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-                .frame(width: 74, alignment: .trailing)
-        }
     }
 }
 
@@ -534,6 +529,9 @@ private struct ResourceRingCard: View {
 private struct RingGauge: View {
     let percent: Double
     let accent: Color
+    var diameter: CGFloat = 112
+    var caption: String = "占用"
+    var lineWidth: CGFloat = 12
 
     private var value: Double {
         guard percent.isFinite else { return 0 }
@@ -543,28 +541,28 @@ private struct RingGauge: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color(.systemGray5), lineWidth: 12)
+                .stroke(Color(.systemGray5), lineWidth: lineWidth)
 
             Circle()
                 .trim(from: 0, to: value / 100)
                 .stroke(
                     accent,
-                    style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
 
             VStack(spacing: 1) {
                 Text(String(format: "%.0f%%", value))
-                    .font(.system(size: 27, weight: .semibold, design: .rounded))
+                    .font(.system(size: diameter * 0.24, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                Text("占用")
+                Text(caption)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 112, height: 112)
+        .frame(width: diameter, height: diameter)
     }
 }
 

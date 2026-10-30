@@ -2,6 +2,23 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.25.0 — 控制面板并进 OpenClash、闪存改圆环、设备可改名
+
+- **控制面板并进 OpenClash 卡**：删掉独立的 `panelCard`，在状态/模式/启停之后加一条细线，
+  再接 `panelBlock`（图标 + 「控制面板」+ 可打开/未就绪标签 + `host:port · dashboard`，
+  下面整宽主按钮「打开控制面板」）。卡片副标题从「面板端口 9090」改成当前配置名。
+- **硬件状态加图标、风扇按转速换图标**：格子改成彩色底图标（36pt）+ 标题 + 读数；
+  温度计按 ≤40 / <70 / ≥70 显示低/中/高档并配青/橙/红；风扇低转速 `fanblades`、
+  中速 `fanblades.fill`、≥2400 RPM 换 `wind` 并转橙，标题后跟「静止/低速/中速/高速」标签。
+- **闪存改成已用 / 剩余 + 圆环**：删掉 `FlashCompositionBar`、`FlashLegendRow` 和
+  `FlashInfo.systemShare/appShare/availableShare`，只留已用、剩余两个数字和总容量；
+  左侧复用 `RingGauge`（新增 `diameter/caption/lineWidth` 参数，98pt、中心显示「已用」）。
+- **连接设备可改名**：`AppModel.deviceAliases`（按 MAC、没 MAC 用 IP）+ `displayName(for:)`、
+  `hasAlias(_:)`、`setDeviceAlias(_:for:)`，存 UserDefaults；`DeviceListView` 行改为可点，
+  用 alert 里的 TextField 改名 / 恢复原名；行内 IP 与 MAC 合成一行，右侧放铅笔按钮；
+  概览设备卡也走 `displayName`。
+- 版本 1.25.0 / build 38。
+
 ## v1.24.0 — 设置页路由器卡照图重排、代理页细节收拾
 
 - **设置页「路由器」重做成一张大卡**（参考版式）：
@@ -322,7 +339,7 @@ Android 版的 iOS 原生 SwiftUI 移植。
 - 概览：
   - CPU、内存、实时上下行、会话流量
   - 温度和风扇转速
-  - DHCP 租约设备及详情
+  - DHCP 租约设备及详情（可给设备改名）
   - 仅 LAN 端口 / LAN 桥接
   - 系统信息（主机名、型号、架构、固件、内核、运行时间、负载）
   - 速度曲线（Canvas 折线，不依赖 Swift Charts）
@@ -336,7 +353,7 @@ Android 版的 iOS 原生 SwiftUI 移植。
   - 启动 / 关闭 / 重启（已运行时只提示，不重复发命令）
   - 运行数据：上传、下行、总量、连接数、内存、CPU、负载
   - 配置文件选择（自绘半屏选择器）+ 应用后重启内核
-  - 控制面板：App 内 WKWebView 打开
+  - 控制面板：App 内 WKWebView 打开（入口并进 OpenClash 卡）
   - 访问检查：百度、网易云音乐、GitHub、YouTube，圆点按延迟高低变色 + 延迟数值
 - 设置：
   - 跟随系统 / 浅色 / 深色
