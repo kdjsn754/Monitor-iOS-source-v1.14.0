@@ -48,6 +48,59 @@ extension View {
     }
 }
 
+/// 卡片里的「小块底色」。
+///
+/// 以前这些格子一律用 `Color(.tertiarySystemFill)`——一块偏冷的灰。
+/// 白卡上叠几块灰，页面看着像没做完：灰和主色蓝不是一族，格子多的时候整页发脏。
+/// 现在改成「同色极浅填充 + 同色细描边」：填的是每个格子自己的主色（CPU 橙、内存靛、
+/// 下载蓝、上传紫…），块面感还在，颜色也和图标、数字对上了。
+/// 深色模式下提一点不透明度，否则叠在深色卡上会看不见。
+struct SoftTileModifier<S: InsettableShape>: ViewModifier {
+    let color: Color
+    let shape: S
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                shape.fill(color.opacity(colorScheme == .dark ? 0.16 : 0.05))
+            }
+            .overlay {
+                shape.strokeBorder(color.opacity(colorScheme == .dark ? 0.28 : 0.15),
+                                   lineWidth: 1)
+            }
+    }
+}
+
+extension View {
+    /// 任意形状的浅色底。
+    func softTile<S: InsettableShape>(_ color: Color = .blue, in shape: S) -> some View {
+        modifier(SoftTileModifier(color: color, shape: shape))
+    }
+
+    /// 圆角矩形的浅色底（最常用）。
+    func softTile(_ color: Color = .blue, radius: CGFloat = 12) -> some View {
+        softTile(color, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+}
+
+/// 半屏面板的底色。
+///
+/// 系统给的 `systemGroupedBackground` 是一整片中性灰，自绘面板铺上去整块发灰。
+/// 这里用「白底 + 一丝主色」，和 App 自己的渐变背景同一个色系，面板就不会显得脏。
+struct SheetSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            Color(.systemBackground)
+            Color.blue.opacity(colorScheme == .dark ? 0.10 : 0.035)
+        }
+        .ignoresSafeArea()
+    }
+}
+
 /// 页面大标题，直接画在内容里，不用系统的大标题。
 ///
 /// 系统大标题占的位置很死：状态栏 59pt + 导航栏 44pt + 标题，标题顶边要到屏幕
@@ -102,7 +155,7 @@ struct HeaderButton: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Color.blue)
                 .frame(width: 34, height: 34)
-                .background(Color(.tertiarySystemFill), in: Circle())
+                .softTile(.blue, in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)

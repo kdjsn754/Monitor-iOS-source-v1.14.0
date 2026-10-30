@@ -187,10 +187,10 @@ struct ProxyView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .background(
-                    canOpenPanel ? Color.blue : Color(.systemGray4),
+                    canOpenPanel ? Color.blue : Color.blue.opacity(0.14),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
-                .foregroundStyle(canOpenPanel ? Color.white : Color(.systemGray))
+                .foregroundStyle(canOpenPanel ? Color.white : Color.secondary)
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -209,7 +209,7 @@ struct ProxyView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .softTile(accent, in: Capsule())
     }
 
     private func modeButton(_ title: String, value: String) -> some View {
@@ -225,9 +225,16 @@ struct ProxyView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(
-                    selected ? Color.blue.opacity(0.14) : Color(.tertiarySystemFill),
+                    selected ? Color.blue.opacity(0.16) : Color.blue.opacity(0.05),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(
+                            selected ? Color.blue.opacity(0.55) : Color.blue.opacity(0.15),
+                            lineWidth: 1
+                        )
+                }
                 .foregroundStyle(selected ? Color.blue : Color.primary)
         }
         .buttonStyle(.plain)
@@ -332,8 +339,7 @@ struct ProxyView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .softTile(color, radius: 12)
     }
 
     // MARK: - 内核
@@ -345,22 +351,23 @@ struct ProxyView: View {
                 GridItem(.flexible(), spacing: 10)
             ], spacing: 10) {
                 statTile("连接数", "\(metrics.connections)",
-                         icon: "point.3.connected.trianglepath.dotted")
+                         icon: "point.3.connected.trianglepath.dotted", color: .teal)
                 statTile("内存", formatBytes(Double(metrics.memory)),
-                         icon: "memorychip")
+                         icon: "memorychip", color: .indigo)
                 statTile("CPU", String(format: "%.1f%%", metrics.cpu),
-                         icon: "cpu")
+                         icon: "cpu", color: .orange)
                 statTile("负载", String(format: "%.1f%%", metrics.load),
-                         icon: "speedometer")
+                         icon: "speedometer", color: .purple)
             }
         }
     }
 
-    private func statTile(_ label: String, _ value: String, icon: String) -> some View {
+    private func statTile(_ label: String, _ value: String, icon: String,
+                          color: Color = .blue) -> some View {
         HStack(spacing: 9) {
             Image(systemName: icon)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(color)
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
@@ -376,8 +383,7 @@ struct ProxyView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .softTile(color, radius: 11)
     }
 
     // MARK: - 配置
@@ -437,8 +443,7 @@ struct ProxyView: View {
                         }
                     }
                     .padding(11)
-                    .background(Color(.tertiarySystemFill),
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .softTile(.blue, radius: 14)
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -512,8 +517,8 @@ struct ProxyView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
-                    .foregroundStyle(.primary)
+                    .softTile(.blue, in: Capsule())
+                    .foregroundStyle(.blue)
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -568,8 +573,7 @@ struct ProxyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
-        .background(Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .softTile(.blue, radius: 12)
     }
 
     /// 小圆点：里面实心 8pt，外面一层同色淡光晕，颜色即延迟档位。
@@ -647,7 +651,7 @@ private struct ConfigPickerSheet: View {
             }
             footer
         }
-        .background(Color(.systemGroupedBackground))
+        .background(SheetSurface())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -669,9 +673,9 @@ private struct ConfigPickerSheet: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.blue)
                     .frame(width: 28, height: 28)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .softTile(.blue, in: Circle())
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -696,20 +700,21 @@ private struct ConfigPickerSheet: View {
                         .frame(width: 18, height: 18)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(.subheadline.weight(selected ? .semibold : .regular))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if isApplied {
-                        Text("使用中")
-                            .font(.system(size: 9, weight: .medium))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.14), in: Capsule())
-                            .foregroundStyle(.green)
-                    }
+                // 「使用中」以前另起一行，于是这一行比别的行高出一截、圆角块也跟着
+                // 变得一大一小。现在并到名字右边，所有行都是单行等高的。
+                Text(name)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if isApplied {
+                    Text("使用中")
+                        .font(.system(size: 9, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.14), in: Capsule())
+                        .foregroundStyle(.green)
                 }
 
                 Spacer(minLength: 4)
@@ -721,17 +726,18 @@ private struct ConfigPickerSheet: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, isApplied ? 10 : 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            // minHeight 兜底：名字长短、有没有标签，都不影响行高
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             .background(
-                selected ? Color.blue.opacity(0.08) : Color(.secondarySystemGroupedBackground),
+                selected ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
                 in: RoundedRectangle(cornerRadius: 13, style: .continuous)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .strokeBorder(
-                        selected ? Color.blue.opacity(0.35) : Color(.separator).opacity(0.4),
-                        lineWidth: 0.8
+                        selected ? Color.blue.opacity(0.5) : Color.blue.opacity(0.14),
+                        lineWidth: selected ? 1.2 : 1
                     )
             }
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
@@ -756,10 +762,10 @@ private struct ConfigPickerSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .background(
-                        canApply ? Color.blue : Color(.systemGray4),
+                        canApply ? Color.blue : Color.blue.opacity(0.14),
                         in: Capsule()
                     )
-                    .foregroundStyle(canApply ? Color.white : Color(.systemGray))
+                    .foregroundStyle(canApply ? Color.white : Color.secondary)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

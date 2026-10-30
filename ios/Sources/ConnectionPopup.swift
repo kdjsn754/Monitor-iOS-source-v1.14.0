@@ -200,8 +200,7 @@ struct ConnectionPopupView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity)
                 .padding(8)
-                .background(Color(.tertiarySystemFill),
-                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .softTile(.red, radius: 9)
         }
     }
 

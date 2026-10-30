@@ -13,8 +13,7 @@ name: Build unsigned iOS IPA
 #   - 默认 auto 只排 xcode-27（macOS 27 + Xcode 27 / iOS 27 SDK）。以前是 macos-15 +
 #     macos-26 一起抢，命中率高，但旧 SDK 打出来的包在新机型上会黑边（见下），所以砍掉了。
 #   - 队列等待时间不计入失败：job 超时放宽到 150 分钟，真正的工作量由各 step 的
-#     timeout-minutes 卡住（环境信息 3、选 Xcode 12、检查 SDK 5、装 XcodeGen 6、
-#     生成工程 10、解析依赖 10、归档 20、打包 5），
+#     timeout-minutes 卡住（准备工具链 14、装 XcodeGen 6、生成工程 10、归档 20、打包 5），
 #     不会出现"排了两小时被 30 分钟硬超时杀掉"，也不会出现某一步静默挂一小时。
 #   - concurrency 取消同一分支的重复触发，避免自己挤自己。
 #
@@ -55,6 +54,25 @@ name: Build unsigned iOS IPA
 #        先 `-license accept` + `-runFirstLaunch`，每个调用再套 `perl -e 'alarm ...'` 上限；
 #     3. 每一步都写死 timeout-minutes，卡住就是明确失败，不再静默挂到 150 分钟。
 
+# ── 构建时长（2026-10-30 精简）───────────────────────────────────────────────
+#   原来一次要跑 10 个 step，其中 3 个是纯诊断（还各起一次 xcodebuild），
+#   合计多花 1.5~3 分钟。现在压成 6 个，且没有任何重复的 xcodebuild：
+#     1. 准备工具链（选 Xcode + 初始化 + 校验 SDK + 定位工程，合并了原来 4 个 step）
+#     2. 安装 XcodeGen（下载 4MB 预编译包，不是 brew）
+#     3. 生成工程（xcodegen + 两处自愈，纯文本处理，不启动 xcodebuild）
+#     4. 缓存（SPM 源码 + DerivedData）
+#     5. 归档
+#     6. 打包 IPA / 上传
+#   删掉的东西：
+#     · `xcodebuild -list`：只是列 scheme，没人看，还要启动一次 Xcode；
+#     · `-resolvePackageDependencies` 单独一步：归档时本来就会解析，白跑一遍；
+#     · `-showBuildSettings` 检查产物名：那是全图求解，最慢的一步；
+#       现在改成在 pbxproj 里数 `PRODUCT_NAME = OpenWrtMonitor;` 的条数，毫秒级；
+#     · `-resultBundlePath`：xcresult 有几十 MB 却从没提供过有效信息，日志就够。
+#   剩下真正耗时的只有两件，都是没法绕的：openssl/ssh2 的 C 编译（已用缓存兜住，
+#   第二次起复用 .o），以及 Swift 编译本身。归档命令加了 -showBuildTimingSummary，
+#   构建末尾会打印各阶段耗时，哪里慢一眼能看到。
+#
 on:
   workflow_dispatch:
     inputs:
@@ -153,122 +171,72 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ⚠️ 这一步原来直接跑 `xcodebuild -version` / `xcrun --show-sdk-version`，
-      # 结果在全新镜像上卡死（截图里 4m47s 不动）：首次启动 xcodebuild 会去初始化
-      # 组件 / 校验 Xcode.app，在非交互环境下没有提示、也不输出，能等十几分钟。
-      # 所以这里全部改成「纯读文件」：版本号读 Contents/version.plist，
-      # SDK 版本读 SDKSettings.plist，一个 Xcode 二进制都不启动，秒出。
-      - name: 环境信息
-        timeout-minutes: 3
+      # 一步做完：读环境 → 选最新 Xcode → 首次初始化 → 校验 SDK → 定位工程。
+      #
+      # 原来这里是 4 个 step（环境信息 / 选择 Xcode / 检查 SDK / 定位工程），
+      # 每个 step 都要重起一次 shell、重扫一遍 /Applications，纯属排队等进程启动。
+      # 合并成一步后日志也短了，构建整体少 30~60 秒。
+      #
+      # 版本号、SDK 版本全部只读 plist 文件，几毫秒出结果；
+      # 真正会卡住的只有 xcodebuild 的首次初始化，所以单独套 alarm 上限。
+      - name: 准备工具链（选 Xcode + 校验 SDK）
+        timeout-minutes: 14
         run: |
           set -u
-          sw_vers
-          echo "arch: $(uname -m)"
-          echo "runner: ${RUNNER_NAME} / ${RUNNER_OS} / ${RUNNER_ARCH}"
-          echo "matrix label: ${{ matrix.runner }}"
-          echo "xcode-select: $(xcode-select -p 2>/dev/null || echo 未设置)"
-          echo "--- /Applications 下的 Xcode（读 Info.plist，不启动它）---"
-          found=0
+          w() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          sw_vers | sed -n '1,3p'
+          echo "runner: ${RUNNER_NAME} / ${RUNNER_ARCH} / 标签 ${{ matrix.runner }}"
+
+          # ── 1. 挑版本最高的 Xcode（读 version.plist，不启动 Xcode）──────────
+          # 打分：版本号优先（27.2 > 27.1 > 27.0），同版本非 beta 优先。
+          # 镜像里 Xcode 27.0 是默认，但只有 27.1 起才完全铺满，所以必须显式切。
+          best=""
+          best_key=-1
           for app in /Applications/Xcode*.app; do
             [ -d "$app" ] || continue
-            found=1
+            name="$(basename "$app")"
             v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
                   "$app/Contents/version.plist" 2>/dev/null || true)"
             [ -n "$v" ] || v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-                  "$app/Contents/Info.plist" 2>/dev/null || echo '?')"
-            echo "  $(basename "$app") = $v"
+                  "$app/Contents/Info.plist" 2>/dev/null || echo 0)"
+            major="${v%%.*}"
+            rest="${v#*.}"
+            minor="${rest%%.*}"
+            case "$major" in ''|*[!0-9]*) major=0 ;; esac
+            case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
+            raw=$(( major * 1000 + minor ))
+            case "$name" in
+              *beta*|*Beta*|*BETA*) key=$(( raw * 2 - 1 )) ;;
+              *)                    key=$(( raw * 2 )) ;;
+            esac
+            echo "  ${name} = ${v}（权重 ${key}）"
+            if [ "$key" -gt "$best_key" ]; then
+              best="$app"
+              best_key="$key"
+            fi
           done
-          [ "$found" = "1" ] || echo "::warning::/Applications 下没有 Xcode*.app"
-          echo "--- 当前选中 Xcode 的 iPhoneOS SDK（读 SDKSettings.plist）---"
-          sdkp="$(xcode-select -p 2>/dev/null || true)/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/SDKSettings.plist"
-          if [ -f "$sdkp" ]; then
-            echo "  Version = $(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdkp" 2>/dev/null || echo '?')"
-          else
-            echo "  （没找到 ${sdkp}）"
-          fi
-          echo "以上都只是文件读取，不会卡；SDK 的正式校验在后面的「检查 iOS SDK」。"
-
-      # 机器上常常装了好几版 Xcode，xcode-select 指的却是最旧的那版。
-      # 打包用的 SDK 决定了 App 在新机型上是「铺满」还是「缩在兼容窗口里」，
-      # 所以这里显式挑版本号最高的一版，再把 SDK 版本打出来。
-      #
-      # 首次调用 xcodebuild 才是真正会卡的地方（初始化组件 / 校验 App），
-      # 所以它挪到这一步、切换完 Xcode 之后，并且每个调用都带 alarm 上限：
-      # 卡住最多 12 分钟整步失败，不会再像「环境信息」那样静默挂几十分钟。
-      #
-      # xcode-27 镜像里同时装了 27.0（默认）、27.1 RC、27.2 beta，光比 major 会一直
-      # 停在第 27.0 那个（循环按字母序，第一个赢）。所以按「主版本.次版本」算分。
-      #
-      # 注意：pick() 的诊断行必须走 stderr。`best="$(pick)"` 会把 stdout 全部当成
-      # 返回值，原来的 `echo "发现 ..."` 会一起被塞进 ${best}，让 xcode-select 拿到
-      # 一串多行垃圾文本、静默失败（set -u 不拦，步骤还显示成功）。
-      - name: 选择机器上最新的 Xcode
-        timeout-minutes: 12
-        run: |
-          set -u
-          # 打分规则：版本号优先（27.1 胜过 27.0），同版本里非 beta 优先。
-          # 不再「一票否决 beta」——镜像里 27.1 有时只以 RC/beta 形式存在，
-          # 而我们要的正是 27.1 这个 SDK；否决掉反而会退回到 27.0 过渡档。
-          pick() {
-            best=""
-            best_key=-1
-            for app in /Applications/Xcode*.app; do
-              [ -d "$app" ] || continue
-              name="$(basename "$app")"
-              # 读 version.plist 就够了，不用启动 Xcode（启动会卡，见「环境信息」注释）
-              v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-                    "$app/Contents/version.plist" 2>/dev/null || true)"
-              [ -n "$v" ] || v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-                    "$app/Contents/Info.plist" 2>/dev/null || echo 0)"
-              major="${v%%.*}"
-              rest="${v#*.}"
-              minor="${rest%%.*}"
-              case "$major" in ''|*[!0-9]*) major=0 ;; esac
-              case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
-              raw=$(( major * 1000 + minor ))
-              case "$name" in
-                *beta*|*Beta*|*BETA*) key=$(( raw * 2 - 1 )) ;;   # 同一版本里排后面
-                *)                     key=$(( raw * 2 )) ;;
-              esac
-              echo "发现 ${app}（${v}，权重 ${key}）" >&2   # 走 stderr，别污染 return 值
-              if [ "$key" -gt "$best_key" ]; then
-                best="$app"
-                best_key="$key"
-              fi
-            done
-            echo "$best"
-          }
-          best="$(pick)"
           if [ -n "$best" ]; then
             sudo xcode-select -s "$best"
-            echo "已切到 $best"
+            echo "已切到 ${best}"
           else
-            echo "::warning::没在 /Applications 里找到 Xcode*.app，沿用 xcode-select 当前指向"
+            echo "::warning::/Applications 下没找到 Xcode*.app，沿用当前指向"
           fi
-          echo "xcode-select 现在指向：$(xcode-select -p)"
-          # 新镜像上许可证/首次启动组件没初始化过，xcodebuild 就会一直等；
-          # 这两条命令本身不联网装东西（组件已在镜像里），但可能较慢，所以给上限。
-          w() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
+          # ── 2. 首次初始化 + 实际版本（只有这两条会慢，给上限）─────────────
           sudo xcodebuild -license accept >/dev/null 2>&1 || true
           w 420 sudo xcodebuild -runFirstLaunch || echo "::warning::-runFirstLaunch 失败或超时，继续"
-          echo "=== 确认实际生效的版本 ==="
-          w 300 xcodebuild -version || echo "::warning::xcodebuild -version 仍失败或超时"
+          echo "=== 实际生效的版本 ==="
+          w 300 xcodebuild -version || echo "::warning::xcodebuild -version 失败或超时"
 
-      # 系统的「兼容窗口」按打包 SDK 分档：SDK ≤ 26 只给旧尺寸窗口（上下黑边），
-      # SDK 27 起铺到边缘（还剩很细的边），SDK 27.1 起才算真正铺满。
-      # 低于 26 直接失败；26 能出货但会警告。
-      - name: 检查 iOS SDK
-        timeout-minutes: 5
-        run: |
-          set -u
-          sdk="$(perl -e 'alarm shift; exec @ARGV' 120 xcrun --sdk iphoneos --show-sdk-version 2>/dev/null | tr -dc '0-9.')"
+          # ── 3. iPhoneOS SDK 版本（读 SDKSettings.plist，读不到才问 xcrun）──
+          sdkp="$(xcode-select -p)/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/SDKSettings.plist"
+          sdk="$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdkp" 2>/dev/null | tr -dc '0-9.')"
           if [ -z "$sdk" ]; then
-            sdkp="$(xcode-select -p)/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/SDKSettings.plist"
-            sdk="$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdkp" 2>/dev/null | tr -dc '0-9.')"
-            echo "xcrun 没给出版本，改用 $sdkp 读到：${sdk:-空}"
+            sdk="$(w 120 xcrun --sdk iphoneos --show-sdk-version 2>/dev/null | tr -dc '0-9.')"
+            echo "SDKSettings.plist 没读到，改用 xcrun：${sdk:-空}"
           fi
           if [ -z "$sdk" ]; then
-            echo "::error::取不到 iphoneos SDK 版本（xcrun 和 SDKSettings.plist 都失败），无法确认是否会黑边。"
+            echo "::error::取不到 iphoneos SDK 版本（plist 和 xcrun 都失败），无法确认会不会黑边。"
             exit 1
           fi
           major="${sdk%%.*}"
@@ -276,27 +244,24 @@ jobs:
           minor="${rest%%.*}"
           case "$major" in ''|*[!0-9]*) major=0 ;; esac
           case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
-          echo "检测到 iphoneos SDK: $sdk"
+          echo "检测到 iphoneos SDK: ${sdk}"
+          # 系统的「兼容窗口」按打包 SDK 分档：≤26 有黑边，27.0 过渡，27.1+ 完全铺满。
           if [ "$major" -lt 26 ]; then
-            echo "::error::当前 iOS SDK 是 ${sdk}（低于 26）。用它打出来的包在新机型上会被系统按兼容模式运行，屏幕上下有黑边。请改用 xcode-27 运行器（macOS 27 + Xcode 27）。"
+            echo "::error::当前 iOS SDK 是 ${sdk}（低于 26）。用它打出来的包在新机型上会被系统按兼容模式运行，屏幕上下有黑边。请改用 xcode-27 运行器。"
             exit 1
-          fi
-          if [ "$major" -lt 27 ]; then
-            echo "::warning::iOS SDK 是 ${sdk}（低于 27）。系统会按「默认兼容」档运行：整个界面缩在一个旧尺寸窗口里，上下仍有黑边。把运行器换成 xcode-27 才能真正铺满。"
+          elif [ "$major" -lt 27 ]; then
+            echo "::warning::iOS SDK 是 ${sdk}（低于 27）。系统会按「默认兼容」档运行，上下仍有黑边，换 xcode-27 才能铺满。"
             {
               echo ""
-              echo "> ⚠️ 本次打包用的是 iOS $sdk SDK（< 27）：系统会把界面放进旧尺寸兼容窗口，上下仍会留黑边。"
-              echo "> 想彻底去掉黑边，请把运行器换成 **xcode-27**（macOS 27 + Xcode 27）重新打包。"
+              echo "> ⚠️ 本次打包用的是 iOS ${sdk} SDK（< 27）：系统会把界面放进旧尺寸兼容窗口，上下仍会留黑边。"
             } >> "$GITHUB_STEP_SUMMARY"
           elif [ "$minor" -lt 1 ]; then
-            echo "::warning::iOS SDK 是 ${sdk}（27.0）。这一档是「过渡适配」：窗口已经铺到屏幕边缘，但偶尔还能看到一条极细的边；27.1 起才算完全铺满。"
+            echo "::warning::iOS SDK 是 ${sdk}（27.0）。这一档是「过渡适配」，偶尔还能看到极细的边；27.1 起才完全铺满。"
           else
-            echo "SDK 版本满足要求（$sdk ≥ 27.1），界面可以完全铺满屏幕"
+            echo "SDK 版本满足要求（${sdk} ≥ 27.1），界面可以完全铺满屏幕"
           fi
 
-      - name: 定位 iOS 工程
-        timeout-minutes: 1
-        run: |
+          # ── 4. 定位 iOS 工程（后面各步用 ${IOS_DIR}）───────────────────────
           if [ -f ios/project.yml ]; then
             echo "IOS_DIR=ios" >> "$GITHUB_ENV"
           elif [ -f project.yml ]; then
@@ -380,59 +345,21 @@ jobs:
           fi
           echo "Resources 阶段里还有没有 Info.plist：$(grep -c '/\* Info\.plist in Resources \*/' "$pbx" || true)"
 
-          # -list 只是列 scheme，但如果 Xcode 组件没初始化好，它同样会卡；
-          # 列不出来不影响后面归档，所以超时就跳过，不拖住整条流水线。
-          perl -e 'alarm shift; exec @ARGV' 240 \
-            xcodebuild -list -project OpenWrtMonitor.xcodeproj \
-            || echo "::warning::xcodebuild -list 超时或失败，跳过（不影响归档）"
-
-      - name: 缓存 Swift 包
+      # ── 缓存：SPM 源码 + 编译中间产物 ─────────────────────────────────────
+      # 依赖链是 libssh2-apple → openssl-apple，全是 C 源码，冷编译要 1~3 分钟，
+      # 而它们和我们改的 Swift 代码毫无关系。把 DerivedData 一起缓存下来，
+      # 第二次起这些 .o 直接复用，只编改动过的 Swift 文件。
+      # restore-keys 用前缀匹配，所以即使源码变了也能捞到上一版缓存做增量。
+      - name: 缓存（SPM 源码 + 编译产物）
         continue-on-error: true
         uses: actions/cache@v4
         with:
-          path: ${{ env.IOS_DIR }}/build/spm
-          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Package.swift') }}
+          path: |
+            ${{ env.IOS_DIR }}/build/spm
+            ${{ env.IOS_DIR }}/build/DerivedData
+          key: build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Package.swift', '**/Package.resolved', 'ios/project.yml', 'ios/Sources/**') }}
           restore-keys: |
-            spm-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: 解析 Swift 包依赖
-        working-directory: ${{ env.IOS_DIR }}
-        timeout-minutes: 10
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project OpenWrtMonitor.xcodeproj \
-            -scheme OpenWrtMonitor \
-            -clonedSourcePackagesDirPath build/spm
-
-      # 归档前先确认产物名不是空的。PRODUCT_NAME 解析成空串时，Xcode 会把产物
-      # 放到 .../Applications/.app，然后报一句很难懂的
-      # "error: Multiple commands produce '.../Applications/.app'"（2026-10-30 踩过）。
-      # 这里提前把它打印出来并硬性拦住，报错信息直接指向真实原因。
-      #
-      # ⚠️ 绝对不要在 xcodebuild 命令行上写 PRODUCT_NAME=xxx。
-      # 命令行设置是**全局覆盖**，会作用到依赖图里的每一个 target，包括本地 SPM 包里的
-      # OpenSSL / COpenSSL / SSH2 / CSSH2。那样它们全都会去产出同一个 OpenWrtMonitor.o，
-      # 于是报 error: Multiple commands produce '.../UninstalledProducts/iphoneos/OpenWrtMonitor.o'
-      # （2026-10-30 第二轮归档失败就是自己踩的）。产物名只能写进工程（target 级）。
-      - name: 检查产物名（PRODUCT_NAME）
-        working-directory: ${{ env.IOS_DIR }}
-        timeout-minutes: 8
-        run: |
-          set -u
-          common="-project OpenWrtMonitor.xcodeproj -scheme OpenWrtMonitor \
-                  -configuration Release -sdk iphoneos \
-                  -destination generic/platform=iOS"
-          # shellcheck disable=SC2086
-          out="$(perl -e 'alarm shift; exec @ARGV' 420 \
-            xcodebuild -showBuildSettings $common 2>/dev/null || true)"
-          echo "--- 工程里的关键设置 ---"
-          echo "$out" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
-          pname="$(echo "$out" | awk -F' = ' '/^ *PRODUCT_NAME = /{print $2; exit}' | tr -d '[:space:]')"
-          if [ -z "$pname" ]; then
-            echo "::error::工程里的 PRODUCT_NAME 还是空的。上面「生成 Xcode 工程」那步的自愈应该补上它；若补了仍为空，说明 project.pbxproj 的结构变了，需要检查 ios/project.yml 的 settings.base。"
-            exit 1
-          fi
-          echo "PRODUCT_NAME = ${pname}（正常，归档会用它）"
+            build-${{ runner.os }}-${{ runner.arch }}-
 
       - name: 构建（不签名）
         working-directory: ${{ env.IOS_DIR }}
@@ -449,8 +376,7 @@ jobs:
             -archivePath build/OpenWrtMonitor.xcarchive \
             -derivedDataPath build/DerivedData \
             -clonedSourcePackagesDirPath build/spm \
-            -resultBundlePath build/OpenWrtMonitor.xcresult \
-            -quiet \
+            -showBuildTimingSummary \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -507,19 +433,19 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # 以前这里连 xcresult 一起上传（几十 MB），但真正有用的信息全在 archive.log 里，
+      # 所以现在只传日志：失败产物从 8~40MB 降到十几 KB，下载也快。
       - name: 失败时上传日志
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ios-build-failure-${{ matrix.runner }}
-          path: |
-            ${{ env.IOS_DIR }}/build/archive.log
-            ${{ env.IOS_DIR }}/build/OpenWrtMonitor.xcresult
+          path: ${{ env.IOS_DIR }}/build/archive.log
           if-no-files-found: ignore
           retention-days: 7
 
       - name: 失败提示
         if: failure()
         run: |
-          echo "::error::构建失败或超时，已上传 archive.log 与 xcresult，先看日志里最后一个 error: 行。"
+          echo "::error::构建失败或超时，已上传 archive.log，先看里面最后一个 error: 行。"
           echo "若全程停在 Queued（等机器），说明该标签的池子满：重跑一次，或改用默认的 auto。"

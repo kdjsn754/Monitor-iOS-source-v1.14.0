@@ -83,10 +83,19 @@ struct PollSettingsView: View {
                                 .padding(.vertical, 7)
                                 .background(
                                     abs(seconds - value) < 0.5
-                                        ? Color.blue.opacity(0.14)
-                                        : Color(.tertiarySystemFill),
+                                        ? Color.blue.opacity(0.16)
+                                        : Color.blue.opacity(0.05),
                                     in: Capsule()
                                 )
+                                .overlay {
+                                    Capsule()
+                                        .strokeBorder(
+                                            abs(seconds - value) < 0.5
+                                                ? Color.blue.opacity(0.45)
+                                                : Color.blue.opacity(0.13),
+                                            lineWidth: 1
+                                        )
+                                }
                                 .foregroundStyle(abs(seconds - value) < 0.5
                                                  ? Color.blue : Color.primary)
                         }

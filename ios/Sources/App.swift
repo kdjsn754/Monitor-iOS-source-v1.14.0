@@ -204,10 +204,7 @@ struct LoginView: View {
                         .font(.system(size: 30))
                         .foregroundStyle(.blue)
                         .frame(width: 54, height: 54)
-                        .background(Color(.tertiarySystemFill), in: Circle())
-                        .overlay {
-                            Circle().strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5)
-                        }
+                        .softTile(.blue, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
                         Text("OpenWrt 监控")
                             .font(.title2.bold())

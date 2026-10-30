@@ -2,6 +2,26 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.28.1 — 去掉所有灰底（改用同色浅底）、按钮与行块等高
+
+- **新增两个样式件**（`Glass.swift`）：
+  - `softTile(_ color: Color, in shape:)` / `softTile(_:radius:)`：同色 5% 填充 +
+    15% 描边（深色模式 16% / 28%），替代原来所有 `Color(.tertiarySystemFill)`。
+    灰底在浅色页面上显脏，而且和主色蓝不同族；改成同色极浅底之后，
+    每一格的底色就是它自己的主色（CPU 橙、内存靛、下载蓝、上传紫…）。
+  - `SheetSurface()`：半屏面板底色，「白底 + 一丝主色」，替代
+    `systemGroupedBackground` 那一整片中性灰。
+- **替换范围**：概览硬件状态（两张圆环卡 + 温度/风扇两格）、`RingGauge` 轨道、
+  网络代理的累计流量格 / 内核四格 / 状态胶囊 / 模式按钮 / 配置条 / 访问检查四格 /
+  重新检测、设置的三个动作按钮 / 外观三档 / 采集小胶囊 / 页头圆钮 / 刷新圆钮、
+  两个半屏面板与其中各行、连接弹窗的错误详情框（改浅红）。
+  图标底板同步从 12% 提到 18~20%，否则同色叠同色会糊。
+- **三个动作按钮等高**：`arrow.left.arrow.right` 比 `plus` 的符号高度高约 6pt，
+  盒子跟着内容长，于是三块一大一小。现在图标统一 `.frame(height: 20)`。
+- **配置选择器行等高**：`使用中` 标签从「名字下一行」改成「名字右边」，
+  再加 `.frame(minHeight: 54)` 兜底，行高不再随标签变化。
+- 版本 1.28.1 / build 42。
+
 ## v1.28.0 — 硬件状态上下对调、设备列表小字分列、关于页给兼容窗口留证
 
 - **硬件状态上下对调**：`hardwareContent` 第一排改成 `HardwareGauge`（CPU / 内存圆环），
@@ -44,6 +64,12 @@ Android 版的 iOS 原生 SwiftUI 移植。
   `error: Multiple commands produce '…/UninstalledProducts/iphoneos/OpenWrtMonitor.o'`
   （2026-10-30 实际踩过）。产物名只写进工程，工作流 / `codemagic.yaml` /
   `build-unsigned-ipa.sh` 三处的命令行覆盖已全部删除。
+- **构建流程精简（10 步 → 6 步）**：原来「环境信息 / 选 Xcode / 检查 SDK / 定位工程」
+  四个 step 合并成一步「准备工具链」；删掉 `xcodebuild -list`、
+  单独的 `-resolvePackageDependencies`、`-showBuildSettings`（最慢，改成数 pbxproj 里的
+  `PRODUCT_NAME` 条数）、`-resultBundlePath`；失败产物只传 `archive.log`。
+  新增 `build/spm` + `build/DerivedData` 联合缓存（openssl/ssh2 全是 C 源码，
+  冷编译 1~3 分钟，第二次起复用 .o）；归档去掉 `-quiet` 并加 `-showBuildTimingSummary`。
 - 版本 1.28.0 / build 41。
 
 ## v1.27.0 — CPU/内存并入硬件状态、设备卡只看概括、闪存总量回归

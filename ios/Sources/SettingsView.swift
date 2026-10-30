@@ -144,10 +144,10 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
                 .background(
-                    canOpenWeb ? Color.blue : Color(.systemGray4),
+                    canOpenWeb ? Color.blue : Color.blue.opacity(0.14),
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
-                .foregroundStyle(canOpenWeb ? Color.white : Color(.systemGray))
+                .foregroundStyle(canOpenWeb ? Color.white : Color.secondary)
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -189,8 +189,11 @@ struct SettingsView: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 7) {
+                // 三个图标的「自带高度」并不一样（arrow.left.arrow.right 比 plus 高约 6pt），
+                // 不框住的话三个盒子就一高一矮。这里统一给 20pt 的框，高度就一致了。
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .semibold))
+                    .frame(height: 20)
                 Text(title)
                     .font(.system(size: 12, weight: highlighted ? .semibold : .regular))
                     .lineLimit(1)
@@ -200,13 +203,13 @@ struct SettingsView: View {
             .padding(.vertical, 13)
             .foregroundStyle(highlighted ? Color.blue : Color.primary)
             .background(
-                (highlighted ? Color.blue.opacity(0.08) : Color(.tertiarySystemFill)),
+                highlighted ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
-                        highlighted ? Color.blue.opacity(0.45) : Color.clear,
+                        highlighted ? Color.blue.opacity(0.5) : Color.blue.opacity(0.14),
                         lineWidth: 1
                     )
             }
@@ -278,10 +281,19 @@ struct SettingsView: View {
                                 .padding(.vertical, 9)
                                 .background(
                                     themeMode == option.id
-                                        ? Color.blue.opacity(0.14)
-                                        : Color(.tertiarySystemFill),
+                                        ? Color.blue.opacity(0.16)
+                                        : Color.blue.opacity(0.05),
                                     in: Capsule()
                                 )
+                                .overlay {
+                                    Capsule()
+                                        .strokeBorder(
+                                            themeMode == option.id
+                                                ? Color.blue.opacity(0.45)
+                                                : Color.blue.opacity(0.14),
+                                            lineWidth: 1
+                                        )
+                                }
                                 .foregroundStyle(themeMode == option.id ? Color.blue : Color.primary)
                         }
                         .buttonStyle(.plain)
@@ -366,9 +378,14 @@ struct SettingsView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
-            active ? Color.blue.opacity(0.14) : Color(.tertiarySystemFill),
+            active ? Color.blue.opacity(0.16) : Color.blue.opacity(0.05),
             in: Capsule()
         )
+        .overlay {
+            Capsule()
+                .strokeBorder(active ? Color.blue.opacity(0.4) : Color.blue.opacity(0.12),
+                              lineWidth: 1)
+        }
         .foregroundStyle(active ? Color.blue : Color.secondary)
     }
 
@@ -529,7 +546,7 @@ private struct RouterSwitcherSheet: View {
                 }
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(SheetSurface())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .confirmationDialog(
@@ -566,9 +583,9 @@ private struct RouterSwitcherSheet: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.blue)
                     .frame(width: 28, height: 28)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .softTile(.blue, in: Circle())
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -594,7 +611,7 @@ private struct RouterSwitcherSheet: View {
                 HStack(spacing: 10) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(isCurrent ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill))
+                            .fill(isCurrent ? Color.blue.opacity(0.14) : Color.blue.opacity(0.05))
                             .frame(width: 36, height: 36)
                         Image(systemName: isCurrent ? "wifi.router.fill" : "wifi.router")
                             .font(.system(size: 15, weight: .medium))
@@ -653,8 +670,18 @@ private struct RouterSwitcherSheet: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+        .background(
+            isCurrent ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(
+                    isCurrent ? Color.blue.opacity(0.45) : Color.blue.opacity(0.14),
+                    lineWidth: 1
+                )
+        }
     }
 }
 

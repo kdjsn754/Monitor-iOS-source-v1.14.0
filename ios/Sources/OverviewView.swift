@@ -315,7 +315,8 @@ struct OverviewView: View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(color.opacity(0.12))
+                    // 底板比格子底色再深一档：格子本身已经是同色淡底，底板太浅就糊在一起了。
+                    .fill(color.opacity(0.18))
                     .frame(width: 36, height: 36)
 
                 if let rpm = spin, rpm > 0 {
@@ -348,7 +349,7 @@ struct OverviewView: View {
             Spacer(minLength: 0)
         }
         .padding(10)
-        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+        .softTile(color, radius: 12)
     }
 
     /// 连接设备只给一个概括：总数 + 来源 + 「查看全部」。
@@ -515,7 +516,7 @@ private struct HardwareGauge: View {
             HStack(spacing: 6) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(accent.opacity(0.12))
+                        .fill(accent.opacity(0.20))
                         .frame(width: 22, height: 22)
                     Image(systemName: icon)
                         .font(.system(size: 11, weight: .medium))
@@ -545,8 +546,7 @@ private struct HardwareGauge: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .background(Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 12))
+        .softTile(accent, radius: 12)
     }
 }
 
@@ -564,8 +564,9 @@ private struct RingGauge: View {
 
     var body: some View {
         ZStack {
+            // 轨道跟着主色走：原来是一条中性灰，和彩色弧线拼在一起像两种风格。
             Circle()
-                .stroke(Color(.systemGray5), lineWidth: lineWidth)
+                .stroke(accent.opacity(0.13), lineWidth: lineWidth)
 
             Circle()
                 .trim(from: 0, to: value / 100)
