@@ -64,13 +64,31 @@ struct FanControlView: View {
         // 草稿只在**配置**变化时对齐：运行态每 2 秒都在变，拿它当触发条件的话，
         // 用户正拖着 Stepper 的时候草稿会被反复重置。
         .onChange(of: FanDraft(model.fan)) { _, _ in seed() }
-        .confirmationDialog("恢复插件的默认配置？", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("恢复默认", role: .destructive) {
-                Task { await model.restoreFanDefaults() }
+        // 确认框自绘：sheet 里用系统 confirmationDialog，iOS 26 会把它锚到页面
+        // 半空（看着像贴歪的气泡），所以和「连接设备」面板统一走这套浮层。
+        .overlay {
+            if confirmReset {
+                SheetOverlay(onDismiss: { confirmReset = false }) {
+                    SheetOverlayCard {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("恢复插件的默认配置？")
+                                .font(.headline)
+                            Text("会把接管关掉、曲线恢复成 70/76/88 °C，风扇交回官方温控。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        HStack(spacing: 10) {
+                            SheetOverlayButton(title: "取消") { confirmReset = false }
+                            SheetOverlayButton(title: "恢复默认", tint: .red) {
+                                confirmReset = false
+                                Task { await model.restoreFanDefaults() }
+                            }
+                        }
+                    }
+                }
             }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("会把接管关掉、曲线恢复成 70/76/88 °C，风扇交回官方温控。")
         }
     }
 

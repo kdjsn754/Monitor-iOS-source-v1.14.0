@@ -9,17 +9,26 @@ import SwiftUI
 /// 版式与「切换连接」「选择配置文件」两个面板完全一致：同一套 `SheetSurface` 底色、
 /// 同一种「标题 + 小字 + 圆形叉」的表头、同一种白底圆角行。三个面板走同一套
 /// 底部 sheet，摆在一起就是同一个 App 的东西。
+///
+/// **改名与删除确认都是面板内自绘的卡片，不用系统 alert / confirmationDialog。**
+/// 在 sheet 内部弹这两个系统弹窗，iOS 26 会把浮层锚到页面上方、或者干脆不出现
+/// （用户原话：「删除这个弹窗弹出的位置不对，点铅笔编辑没反应」）。
+/// 自绘一层遮罩 + 卡片，位置永远落在这一屏正中，样式也和其他自绘面板统一。
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    /// 正在改名的设备 + 输入框内容。点行尾的铅笔才进这里。
-    @State private var renaming: DeviceInfo?
-    @State private var showRename = false
+
+    /// 正在改名的设备。非 nil 就把改名卡片浮起来。
+    @State private var editing: DeviceInfo?
     @State private var draftName = ""
-    /// 待删除的设备：点单个是 1 台，点右上角是全部离线。确认框共用一份，
-    /// 标题和按钮文案按数量变，不用维护两个弹窗状态。
+    @FocusState private var nameFocused: Bool
+
+    /// 待删除的设备：点单个是 1 台，点右上角是全部离线。
+    /// 非空就浮确认卡片，文案按数量变——不用再维护一个「要不要弹」的布尔。
     @State private var pendingRemove: [DeviceInfo] = []
-    @State private var confirmRemove = false
+
+    /// 改名时把面板撑到全屏：半屏 + 键盘，输入框会被挤得只剩一条缝。
+    @State private var detent: PresentationDetent = .medium
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,8 +37,8 @@ struct DeviceListView: View {
                     // 只有存在离线设备时才出现垃圾桶，全在线的时候这里不该有能点的东西。
                     if model.offlineDeviceCount > 0 {
                         SheetIconButton(systemImage: "trash", label: "清理离线设备") {
+                            editing = nil
                             pendingRemove = model.devices.filter { !$0.online }
-                            confirmRemove = true
                         }
                     }
                     SheetCloseButton { dismiss() }
@@ -60,31 +69,9 @@ struct DeviceListView: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .background(SheetSurface())
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
-        .alert("重命名设备", isPresented: $showRename, presenting: renaming) { device in
-            TextField("设备名称", text: $draftName)
-            Button("保存") {
-                model.setDeviceAlias(draftName, for: device)
-            }
-            Button("恢复原名", role: .destructive) {
-                model.setDeviceAlias("", for: device)
-            }
-            Button("取消", role: .cancel) {}
-        } message: { device in
-            Text("原名 \(device.name) · \(device.ip)。改名只存在这台手机上，路由器那边不受影响。")
-        }
-        .confirmationDialog("删除离线设备", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("删除 \(pendingRemove.count) 台设备", role: .destructive) {
-                model.removeDevices(pendingRemove)
-                pendingRemove = []
-            }
-            Button("取消", role: .cancel) { pendingRemove = [] }
-        } message: {
-            // 说清楚「删的是什么」：只删本机列表里的记录，不碰路由器的租约文件。
-            // 设备重新连上会自己回到列表，所以这一步不是不可逆的。
-            Text("只从这台手机的列表里移除，路由器上的租约不受影响。设备重新连上会自己出现。")
-        }
+        .overlay { modalLayer }
     }
 
     private var headerCaption: String {
@@ -162,7 +149,6 @@ struct DeviceListView: View {
             if !device.online {
                 Button {
                     pendingRemove = [device]
-                    confirmRemove = true
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 12, weight: .semibold))
@@ -194,9 +180,121 @@ struct DeviceListView: View {
         .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
     }
 
+    // MARK: - 面板内的浮层
+
+    /// 一层遮罩 + 一张卡片。点遮罩关闭，点卡片本身不关闭。
+    @ViewBuilder
+    private var modalLayer: some View {
+        if let device = editing {
+            SheetOverlay(onDismiss: closeModals) { renameCard(device) }
+        } else if let first = pendingRemove.first {
+            SheetOverlay(onDismiss: closeModals) {
+                removeCard(count: pendingRemove.count, first: first)
+            }
+        }
+    }
+
+    private func renameCard(_ device: DeviceInfo) -> some View {
+        SheetOverlayCard {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("重命名设备")
+                    .font(.headline)
+                Text("原名 \(device.name) · \(device.ip)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            TextField("设备名称", text: $draftName)
+                .font(.subheadline)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($nameFocused)
+                .onSubmit { commitRename(device) }
+                .padding(.horizontal, 12)
+                .frame(height: 42)
+                .background(Color(.tertiarySystemFill),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            if model.hasAlias(device) {
+                Button {
+                    model.setDeviceAlias("", for: device)
+                    closeModals()
+                } label: {
+                    Text("恢复原名")
+                        .font(.caption)
+                        .foregroundStyle(.red.opacity(0.85))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 10) {
+                SheetOverlayButton(title: "取消") { closeModals() }
+                SheetOverlayButton(title: "保存", tint: .blue) { commitRename(device) }
+            }
+        }
+    }
+
+    private func removeCard(count: Int, first: DeviceInfo) -> some View {
+        SheetOverlayCard {
+            HStack(spacing: 10) {
+                Image(systemName: "trash")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 30, height: 30)
+                    .background(Color.red.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(count == 1 ? "删除这台设备？" : "删除 \(count) 台设备？")
+                        .font(.headline)
+                    if count == 1 {
+                        Text(first.name)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            Text("只从这台手机的列表里移除，路由器上的租约不受影响。设备重新连上会自己出现。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                SheetOverlayButton(title: "取消") { closeModals() }
+                SheetOverlayButton(title: count == 1 ? "删除" : "删除 \(count) 台",
+                                   tint: .red) {
+                    model.removeDevices(pendingRemove)
+                    closeModals()
+                }
+            }
+        }
+    }
+
+    // MARK: - 动作
+
     private func beginRename(_ device: DeviceInfo, _ name: String) {
         draftName = model.hasAlias(device) ? name : device.name
-        renaming = device
-        showRename = true
+        pendingRemove = []
+        editing = device
+        detent = .large
+        // 立刻聚焦有时会被面板动画吃掉，等一拍再点，键盘才跟得上。
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            nameFocused = true
+        }
+    }
+
+    private func commitRename(_ device: DeviceInfo) {
+        model.setDeviceAlias(draftName, for: device)
+        closeModals()
+    }
+
+    private func closeModals() {
+        nameFocused = false
+        editing = nil
+        pendingRemove = []
     }
 }

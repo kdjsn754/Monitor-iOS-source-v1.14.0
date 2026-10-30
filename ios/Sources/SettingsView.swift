@@ -582,22 +582,40 @@ private struct RouterSwitcherSheet: View {
         .background(SheetSurface())
         .presentationDetents([.height(sheetHeight), .large])
         .presentationDragIndicator(.visible)
-        .confirmationDialog(
-            pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
-            isPresented: $confirmDelete,
-            titleVisibility: .visible,
-            presenting: pendingDelete
-        ) { profile in
-            Button("删除连接", role: .destructive) {
-                model.deleteProfile(profile)
-                pendingDelete = nil
+        // 确认框自绘：sheet 里用系统的 confirmationDialog，iOS 26 会把它锚到
+        // 页面半空（看着像贴歪的气泡），和「连接设备」面板统一走这套浮层。
+        .overlay {
+            if confirmDelete, let profile = pendingDelete {
+                SheetOverlay(onDismiss: { closeDelete() }) {
+                    SheetOverlayCard {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("删除「\(profile.title)」？")
+                                .font(.headline)
+                                .lineLimit(2)
+                            Text(profile.id == model.currentProfileID
+                                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
+                                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        HStack(spacing: 10) {
+                            SheetOverlayButton(title: "取消") { closeDelete() }
+                            SheetOverlayButton(title: "删除连接", tint: .red) {
+                                model.deleteProfile(profile)
+                                closeDelete()
+                            }
+                        }
+                    }
+                }
             }
-            Button("取消", role: .cancel) { pendingDelete = nil }
-        } message: { profile in
-            Text(profile.id == model.currentProfileID
-                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
-                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
         }
+    }
+
+    private func closeDelete() {
+        pendingDelete = nil
+        confirmDelete = false
     }
 
     private var caption: String {

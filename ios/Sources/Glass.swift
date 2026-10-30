@@ -477,3 +477,78 @@ struct SheetEmptyState: View {
         }
     }
 }
+
+// MARK: - 面板内的浮层
+
+/// 面板里浮一层遮罩，正中放一张卡片。点遮罩关闭，点卡片本身不关闭。
+///
+/// **sheet 内部不要用系统的 `alert` / `confirmationDialog`。**
+/// iOS 26 会把这两个浮层锚到页面上方（看起来像贴在半空的气泡），
+/// 有时候干脆不展示——表现出来就是「弹窗位置不对」和「点了没反应」。
+/// 两者都是 v1.28.20 实测踩到的（设备列表的删除确认、改名输入框）。
+/// 自绘这套之后位置永远落在这一屏正中，样式也能跟着 App 的卡片走。
+struct SheetOverlay<Content: View>: View {
+    let onDismiss: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+
+            content()
+                .frame(maxWidth: 330)
+                .padding(.horizontal, 28)
+        }
+    }
+}
+
+/// 浮层中间那张白卡片：20 内边距、22 圆角、一圈细边 + 一层柔影。
+/// 末尾那个空手势是为了把卡片范围内的点击吃掉，
+/// 否则会穿透到后面的遮罩上，被当成「点了外面」而误关。
+struct SheetOverlayCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) { content() }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(.systemBackground),
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 26, y: 12)
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .onTapGesture {}
+    }
+}
+
+/// 浮层卡片底部的等宽按钮。`tint` 为空是次要按钮（浅灰底黑字），
+/// 传了颜色就是主按钮（实色底白字），删除用 `.red`。
+struct SheetOverlayButton: View {
+    let title: String
+    var tint: Color? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint == nil ? Color(uiColor: .label) : Color.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(
+                    tint ?? Color(.tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
