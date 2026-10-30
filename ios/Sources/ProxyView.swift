@@ -736,9 +736,8 @@ private struct ConfigPickerSheet: View {
             .padding(.vertical, 12)
             // minHeight 兜底：名字长短、有没有标签，都不影响行高
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            // 行现在合在一张卡里，选中靠左侧那圈蓝点 + 一层淡蓝底表示，
-            // 不再给每行套一圈边框（三行三个框，像三张便利贴）。
-            .background(selected ? Color.blue.opacity(0.06) : Color.clear)
+            // 选中只靠左侧那圈实心蓝点 + 右侧勾，不再铺一层淡蓝底：
+            // 整行染色在卡片里像一条高亮错误行，和这套白卡不是一个材质。
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
