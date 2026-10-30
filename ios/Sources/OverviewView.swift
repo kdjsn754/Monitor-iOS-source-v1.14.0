@@ -23,15 +23,20 @@ struct OverviewView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
-                .padding(.bottom, 20)
+                .padding(.bottom, 28)
             }
             .background(Color.clear)
             // 标题画在内容里了，导航栏整条不要：留着它状态栏下面会空出一整条。
             .toolbar(.hidden, for: .navigationBar)
+            // 给底栏留白：这页 ScrollView 自己声明底部 safe area，
+            // 让最后一卡停在玻璃栏上方，不再被遮住（见 App.swift 的 overlay 说明）。
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 84)
+            }
             .refreshable {
                 await model.manualRefresh()
             }
-            .sheet(isPresented: $showAllDevices) {
+            .fullScreenCover(isPresented: $showAllDevices) {
                 DeviceListView()
             }
         }
@@ -598,18 +603,19 @@ private struct RingGauge: View {
 
 /// 会转的风扇叶轮：转速越高转得越快，停转时静止。
 ///
-/// 以前是「四档 + `.id(period)` 重建 + repeatForever」：最快一档 0.42 秒一圈，
-/// 18pt 的叶轮在手机上不是「转」而是「抖」，而且每跨一次档位就从 0 度重来，看着像抽了一下。
-/// 现在改成：
-///   · 速度随转速**连续**变化（每秒 0.22~0.64 圈），不再有档位；
-///   · 角度直接由当前时间算出来，换速度只是换个斜率，不会跳回 0 度；
-///   · 每秒最多重绘 20 帧，比逐帧动画省，也比原来那种「快到发虚」看得清。
+/// 以前用 `TimelineView(.animation(minimumInterval: 1/20))`：每秒要重绘 20 帧，
+/// 每次重绘都会让 SwiftUI 重新跑一遍 `body`。这个叶轮嵌在概览页的滚动内容里，
+/// 于是缓慢滑动时主线程一直在为它重建视图，结果就是掉帧、卡顿。
+/// 现在改成「一次性下发一条线性无限旋转动画」：旋转只交给合成器（Core Animation）做，
+/// SwiftUI 的 `body` 跑完一次就再也不重跑了，滚动时整页都能稳定 60 帧。
+/// 转速变化时只是把动画周期换一下，从当前角度接着转，不会跳回 0 度。
 private struct FanBlades: View {
     let rpm: Double
     let color: Color
     var size: CGFloat = 18
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var angle: Double = 0
 
     /// 每秒转多少圈。3000 RPM 封顶，再快也不加速——屏幕上已经分不出来了。
     private var turnsPerSecond: Double {
@@ -618,29 +624,25 @@ private struct FanBlades: View {
     }
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                blades(angle: 0)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
-                    blades(angle: angle(at: context.date))
-                }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func blades(angle: Double) -> some View {
         Image(systemName: "fanblades.fill")
             .font(.system(size: size, weight: .medium))
             .foregroundStyle(color)
             .rotationEffect(.degrees(angle))
+            .onAppear(perform: startSpin)
+            .onChange(of: rpm) { _, _ in startSpin() }
+            .accessibilityHidden(true)
     }
 
-    /// 相位只跟时间有关，视图重建多少次都接着上一帧转。
-    private func angle(at date: Date) -> Double {
-        let turns = date.timeIntervalSinceReferenceDate * turnsPerSecond
-        return (turns - turns.rounded(.down)) * 360
+    /// 从当前角度继续转一整圈（360° ≡ 0°，所以循环无缝）。
+    /// 换成线性无限动画后，转得快慢只由这条动画的「一圈用多少秒」决定。
+    private func startSpin() {
+        guard !reduceMotion else {
+            angle = 0
+            return
+        }
+        withAnimation(.linear(duration: 1 / turnsPerSecond).repeatForever(autoreverses: false)) {
+            angle += 360
+        }
     }
 }
 

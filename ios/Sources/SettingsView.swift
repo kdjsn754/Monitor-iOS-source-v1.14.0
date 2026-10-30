@@ -43,16 +43,20 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
-                .padding(.bottom, 24)
+                .padding(.bottom, 32)
             }
             .background(Color.clear)
             // 见 OverviewView：标题画在内容里，导航栏整条不要。
             .toolbar(.hidden, for: .navigationBar)
+            // 给底栏留白（见 App.swift 的 overlay 说明），最后一行不被玻璃栏遮住。
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 84)
+            }
             .sheet(item: $editorRoute) { route in
                 ConnectionEditorView(profile: route.profile)
                     .id(route.id)
             }
-            .sheet(isPresented: $showSwitcher) {
+            .fullScreenCover(isPresented: $showSwitcher) {
                 RouterSwitcherSheet()
                     .environmentObject(model)
             }
@@ -519,31 +523,33 @@ private struct RouterSwitcherSheet: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        CenteredModal {
+            ModalCard {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
 
-            if model.profiles.isEmpty {
-                Text("还没有保存过连接，先在设置页点「新建连接」。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(model.profiles) { profile in
-                            row(profile)
+                    if model.profiles.isEmpty {
+                        Text("还没有保存过连接，先在设置页点「新建连接」。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 8) {
+                                ForEach(model.profiles) { profile in
+                                    row(profile)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 20)
                         }
+                        .frame(maxHeight: 420)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
                 }
             }
         }
-        .background(SheetSurface())
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
         .confirmationDialog(
             pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
             isPresented: $confirmDelete,

@@ -263,3 +263,46 @@ struct GlassProminentButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.82 : 1)
     }
 }
+
+/// 居中的对话框容器：一层半透明遮罩把背后的页面压暗，中间放一张圆角卡片。
+///
+/// 以前「连接设备 / 选择配置文件 / 切换连接」都是底部浮层（`.sheet` + 拖拽条），
+/// 在 iPhone 上只能从底边长出来、还常把最后一行内容压在下面。改成这种居中弹窗后，
+/// 内容是浮在页面正中的卡片，四周留白一致，文字和对齐也好排；点遮罩任意处即可关闭。
+struct CenteredModal<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { dismiss() }
+
+            content()
+                .frame(maxWidth: 460)
+                .padding(.horizontal, 16)
+        }
+    }
+}
+
+/// 居中对话框用的卡片底：和页面卡片同一套白底 + 细边，外加一圈柔和的投影
+/// 把它从遮罩里「托」起来，看着像浮在上面的面板而不是贴上去的。
+struct ModalCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: .black.opacity(0.16), radius: 30, y: 14)
+    }
+}

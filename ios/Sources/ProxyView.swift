@@ -49,11 +49,15 @@ struct ProxyView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
-                .padding(.bottom, 20)
+                .padding(.bottom, 28)
             }
             .background(Color.clear)
             // 见 OverviewView：标题画在内容里，导航栏整条不要。
             .toolbar(.hidden, for: .navigationBar)
+            // 给底栏留白（见 App.swift 的 overlay 说明），最后一行不被玻璃栏遮住。
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 84)
+            }
             .refreshable {
                 await model.manualRefresh()
             }
@@ -62,7 +66,7 @@ struct ProxyView: View {
                     PanelView(url: url)
                 }
             }
-            .sheet(isPresented: $showConfigPicker) {
+            .fullScreenCover(isPresented: $showConfigPicker) {
                 ConfigPickerSheet(
                     configs: oc.configs,
                     applied: oc.config
@@ -668,22 +672,26 @@ private struct ConfigPickerSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(configs, id: \.self) { name in
-                        row(name)
+        CenteredModal {
+            ModalCard {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(configs, id: \.self) { name in
+                                row(name)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
                     }
+                    .frame(maxHeight: 420)
+                    Divider()
+                    footer
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
             }
-            footer
         }
-        .background(SheetSurface())
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     private var header: some View {

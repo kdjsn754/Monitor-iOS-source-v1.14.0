@@ -181,10 +181,14 @@ struct MainTabs: View {
                 .tag(2)
                 .toolbar(.hidden, for: .tabBar)
         }
-        // 用 safeAreaInset 而不是 overlay：这样每页的 ScrollView 会自动把
-        // 底部留出栏的高度，内容不会被栏压住，也不会在滑到底时钻到栏底下。
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        // 底栏用 overlay 浮在内容之上：滚动时卡片会滑到栏底下被玻璃模糊掉，
+        // 既能看到「下面还有内容」又不会被硬切断——这正是液态玻璃想要的效果。
+        // 「最后一行不被栏压住」由每一页 ScrollView 自己的 `.safeAreaInset(edge: .bottom)`
+        // 留白来保证，不依赖 TabView 的 inset 向下传播（实测部分 iOS 版本上传不进子页，
+        // 会导致最底行被盖住，正是之前截图里看到的现象）。
+        .overlay(alignment: .bottom) {
             AppTabBar(selection: $selection)
+                .padding(.bottom, 10)
         }
         // 采集跟着页面走：切到哪一页就只采那一页要用的数据，设置页完全不采。
         .onChange(of: selection) { _, value in
@@ -217,14 +221,7 @@ struct AppTabBar: View {
             }
         }
         .padding(5)
-        .background {
-            Capsule(style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(Color(.separator).opacity(0.45), lineWidth: 0.5)
-                }
-        }
+        .modifier(TabBarGlass())
         .padding(.horizontal, 44)
         .padding(.top, 6)
         .padding(.bottom, 2)
@@ -254,6 +251,30 @@ struct AppTabBar: View {
         .buttonStyle(.plain)
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+}
+
+/// 导航栏的玻璃底：iOS 26 用系统「液态玻璃」(`glassEffect`)，
+/// 胶囊会实时把背后的页面渐变、卡片折进玻璃里，滑动时内容滑到栏下会被自然模糊，
+/// 既看得到「底下还有东西」，又不会被硬生生切断。低于 iOS 26 退回 `ultraThinMaterial`
+/// 毛玻璃 + 一圈细边，照样是半透明的悬浮胶囊。
+struct TabBarGlass: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: Capsule(style: .continuous))
+        } else {
+            content
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color(.separator).opacity(0.45), lineWidth: 0.5)
+                        }
+                }
+        }
     }
 }
 
