@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 网络代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 流量 → 内核 → 配置 → 检查」重排。
+/// 代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 流量 → 内核 → 配置 → 检查」重排。
 struct ProxyView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showPanel = false
@@ -36,7 +36,7 @@ struct ProxyView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    PageHeader("网络代理") {
+                    PageHeader("代理") {
                         HeaderButton("arrow.clockwise") {
                             Task { await model.manualRefresh() }
                         }
@@ -377,8 +377,9 @@ struct ProxyView: View {
                          icon: "point.3.connected.trianglepath.dotted", color: .teal)
                 statTile("内存", formatBytes(Double(metrics.memory)),
                          icon: "memorychip", color: .indigo)
+                // CPU 和概览页的 CPU 圆环用同一个主色蓝，不再用橙——橙色留给温度和告警。
                 statTile("CPU", String(format: "%.1f%%", metrics.cpu),
-                         icon: "cpu", color: .orange)
+                         icon: "cpu", color: .blue)
                 statTile("负载", String(format: "%.1f%%", metrics.load),
                          icon: "speedometer", color: .purple)
             }
@@ -776,29 +777,38 @@ private struct ConfigPickerSheet: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
-            Button {
-                guard !picked.isEmpty, picked != applied else {
+            // 没得可应用时不要再摆一枚「已在使用」的淡蓝死按钮：
+            // 那是一个点了没反应的按钮长得像主按钮，整块发灰发脏。
+            // 改成一行静态小字，高度和按钮一致，切换时不会跳。
+            if canApply {
+                Button {
+                    guard !picked.isEmpty else {
+                        dismiss()
+                        return
+                    }
+                    onApply(picked)
                     dismiss()
-                    return
+                } label: {
+                    Text(actionTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(Color.blue, in: Capsule())
+                        .foregroundStyle(Color.white)
+                        .contentShape(Capsule())
                 }
-                onApply(picked)
-                dismiss()
-            } label: {
-                Text(actionTitle)
-                    .font(.subheadline.weight(.semibold))
+                .buttonStyle(.plain)
+            } else {
+                Text("已在使用 \(appliedName)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .truncationMode(.middle)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
-                    .background(
-                        canApply ? Color.blue : Color.blue.opacity(0.14),
-                        in: Capsule()
-                    )
-                    .foregroundStyle(canApply ? Color.white : Color.secondary)
-                    .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(picked.isEmpty)
 
             Text("切换后 OpenClash 会重启内核，正在走的连接会断一下。")
                 .font(.caption2)

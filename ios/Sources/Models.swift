@@ -187,7 +187,7 @@ enum AppPage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .overview: return "概览"
-        case .proxy: return "网络代理"
+        case .proxy: return "代理"
         case .settings: return "设置"
         }
     }

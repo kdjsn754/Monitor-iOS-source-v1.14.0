@@ -123,7 +123,7 @@ struct SettingsView: View {
                            enabled: !model.profiles.isEmpty) {
                     showSwitcher = true
                 }
-                actionTile("新建连接", icon: "plus", highlighted: true) {
+                actionTile("新建连接", icon: "plus") {
                     openEditor(nil)
                 }
                 actionTile("编辑当前连接", icon: "pencil",
@@ -182,9 +182,12 @@ struct SettingsView: View {
         return "\(profile.user)@\(profile.host):\(profile.port) · 网页 :\(profile.webPortValue)"
     }
 
-    /// 三个等宽方块按钮：图标在上、文字在下。中间那个是主行动，蓝色描边。
+    /// 三个等宽方块按钮：图标在上、文字在下。
+    ///
+    /// 以前中间「新建连接」单独用深一档的蓝底 + 蓝字 + 蓝描边当主按钮，
+    /// 结果三块里有一块像另一套控件，摆在一起更像被选中了。现在三块完全同色、
+    /// 同高、同描边，主次只靠位置（新建排中间）和文案表达。
     private func actionTile(_ title: String, icon: String,
-                            highlighted: Bool = false,
                             enabled: Bool = true,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -193,26 +196,17 @@ struct SettingsView: View {
                 // 不框住的话三个盒子就一高一矮。这里统一给 20pt 的框，高度就一致了。
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.blue)
                     .frame(height: 20)
                 Text(title)
-                    .font(.system(size: 12, weight: highlighted ? .semibold : .regular))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
-            .foregroundStyle(highlighted ? Color.blue : Color.primary)
-            .background(
-                highlighted ? Color.blue.opacity(0.12) : Color.blue.opacity(0.045),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(
-                        highlighted ? Color.blue.opacity(0.5) : Color.blue.opacity(0.14),
-                        lineWidth: 1
-                    )
-            }
+            .softTile(.blue, radius: 14)
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)

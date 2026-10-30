@@ -228,7 +228,10 @@ struct OverviewView: View {
                 HardwareGauge(
                     title: "CPU",
                     icon: "cpu",
-                    accent: .orange,
+                    // 以前是橙色，和「温度 · 温热」那一档（55~70°C）撞色：
+                    // 同一张卡里两块橙，看着像同一个指标。CPU 用主色蓝，
+                    // 温度那三档（青/橙/红）就只剩温度自己在用。
+                    accent: .blue,
                     percent: model.stats.cpu,
                     note: model.routerInfo.cpuCores > 0
                         ? "\(model.routerInfo.cpuCores) 核" : "-- 核",
@@ -352,41 +355,38 @@ struct OverviewView: View {
         .softTile(color, radius: 12)
     }
 
-    /// 连接设备只给一个概括：总数 + 来源 + 「查看全部」。
+    /// 连接设备只给一个概括：总数 + 来源 + 入口。
     /// 概览页不再把设备名一条条铺出来——名字长短不一会把整张卡撑得参差不齐，
     /// 也挡住了下面真正要看的系统信息。明细都留在弹窗里。
+    ///
+    /// 以前这一行是「44pt 浅蓝圆 + 24pt 亮蓝数字 + 浅蓝胶囊」：三种深浅不同的蓝叠在
+    /// 一起，而卡片标题里已经有一枚同样的图标，圆里再画一次纯属重复。
+    /// 现在整行做成一块浅色底（和硬件状态里的格子同一种底），数字回归主色文字，
+    /// 全卡只留右侧胶囊一处强调。
     private var devicesContent: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.blue.opacity(0.12))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "laptopcomputer.and.iphone")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.blue)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(model.devices.count)")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.blue)
-                    Text("台设备在线")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        Button {
+            guard !model.devices.isEmpty else { return }
+            showAllDevices = true
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(model.devices.count)")
+                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                        Text("台在线")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(model.devices.isEmpty ? "DHCP 租约里还没有设备" : "DHCP 租约 · 点开可改名")
+                        .font(.caption2)
+                        .foregroundStyle(Color(.tertiaryLabel))
                 }
-                Text("DHCP 租约")
-                    .font(.caption2)
-                    .foregroundStyle(Color(.tertiaryLabel))
-            }
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-            if !model.devices.isEmpty {
-                Button {
-                    showAllDevices = true
-                } label: {
+                if !model.devices.isEmpty {
                     HStack(spacing: 3) {
                         Text("查看全部")
                         Image(systemName: "chevron.right")
@@ -394,14 +394,19 @@ struct OverviewView: View {
                     }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.blue)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.10), in: Capsule())
-                    .contentShape(Capsule())
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .softTile(.blue, in: Capsule())
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .softTile(.blue, radius: 14)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .disabled(model.devices.isEmpty)
     }
 
     private var systemContent: some View {

@@ -172,7 +172,7 @@ struct MainTabs: View {
                 .tabItem { Label("概览", systemImage: "square.grid.2x2") }
                 .tag(0)
             ProxyView()
-                .tabItem { Label("网络代理", systemImage: "globe") }
+                .tabItem { Label("代理", systemImage: "globe") }
                 .tag(1)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
