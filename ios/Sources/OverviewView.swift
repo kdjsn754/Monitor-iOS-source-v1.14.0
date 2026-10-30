@@ -386,15 +386,38 @@ struct OverviewView: View {
     /// 一起，而卡片标题里已经有一枚同样的图标，圆里再画一次纯属重复。
     /// 现在整行是白底 + 一圈细边，数字回归主色文字；右边「查看全部」也不再套浅蓝胶囊，
     /// 只留蓝色文字和箭头 —— 一行里只强调一处，不再靠铺色块做层级。
+    private var onlineDeviceCount: Int {
+        model.devices.filter { $0.online }.count
+    }
+
+    /// 副标题只在「全都离线」这种反常情况多说一句，正常就一句话带过。
+    private var devicesCaption: String {
+        if model.devices.isEmpty {
+            // 清理过离线设备时，这里不能再说「还没有设备」——用户刚点完删除，
+            // 看到「暂无设备」会以为整份列表被清空了。
+            return model.hiddenDeviceCount > 0
+                ? "已清理 \(model.hiddenDeviceCount) 台离线设备"
+                : "DHCP 租约里还没有设备"
+        }
+        if onlineDeviceCount == 0 {
+            return "\(model.devices.count) 台只有租约，此刻都没连上"
+        }
+        return "DHCP 租约 · 点开可改名"
+    }
+
     private var devicesContent: some View {
         Button {
-            guard !model.devices.isEmpty else { return }
+            // 列表被清空、但确实隐藏过设备时，这一格还得能点开——
+            // 否则用户在概览页看到「0 台在线」，却没有任何入口能进面板恢复。
+            guard !model.devices.isEmpty || model.hiddenDeviceCount > 0 else { return }
             showAllDevices = true
         } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("\(model.devices.count)")
+                        // 这里以前直接数 model.devices.count，而那是「租约条数」——
+                        // 关掉的设备租约还在，数字就一直虚高。现在只数真在线的。
+                        Text("\(onlineDeviceCount)")
                             .font(.system(size: 24, weight: .semibold, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
@@ -402,14 +425,14 @@ struct OverviewView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text(model.devices.isEmpty ? "DHCP 租约里还没有设备" : "DHCP 租约 · 点开可改名")
+                    Text(devicesCaption)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 8)
 
-                if !model.devices.isEmpty {
+                if !model.devices.isEmpty || model.hiddenDeviceCount > 0 {
                     HStack(spacing: 3) {
                         Text("查看全部")
                         Image(systemName: "chevron.right")
@@ -428,7 +451,7 @@ struct OverviewView: View {
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(model.devices.isEmpty)
+        .disabled(model.devices.isEmpty && model.hiddenDeviceCount == 0)
     }
 
     private var systemContent: some View {

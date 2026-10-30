@@ -61,6 +61,13 @@ struct DeviceInfo: Identifiable {
     var ip: String
     var mac: String
     var name: String
+    /// 是否真的还在线。
+    ///
+    /// `/tmp/dhcp.leases` 只是「租出去过」的记录，租期默认 12 小时，
+    /// 设备关机后租约照样在文件里躺着——以前拿它当在线名单，
+    /// 于是关掉的手机、搬走的笔记本永远显示「在线」。
+    /// 现在这条由 ARP / 邻居表 / WiFi 关联表三处交叉得出，租约只负责名字。
+    var online: Bool = true
 }
 
 struct OverviewStats {

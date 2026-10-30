@@ -31,6 +31,33 @@ final class AppModel: ObservableObject {
     @Published var devices: [DeviceInfo] = []
     /// 自定义设备名：键是 MAC（租约重新下发时 IP 会变，MAC 不会），没 MAC 才退回 IP。
     @Published var deviceAliases: [String: String] = [:]
+    /// 删掉（隐藏）的离线设备。键同上，值是删掉那一刻。
+    ///
+    /// 路由器上的租约**不动**——那是 dnsmasq 管的文件，手机端去改容易把
+    /// 「谁在用这个 IP」搞乱。这里只是本机记账，目标是把「人已经走了、
+    /// 只剩一条租约」的僵尸条目从列表里清掉。设备真的回来时自动撤销隐藏，
+    /// 所以不需要额外的「恢复」按钮去救它。
+    @Published private(set) var hiddenDeviceCount = 0
+    /// 自动清理离线设备。
+    @Published var autoRemoveOffline: Bool {
+        didSet { UserDefaults.standard.set(autoRemoveOffline, forKey: Self.autoRemoveKey) }
+    }
+    /// 离线多久算「可以清掉」，默认 1 小时。
+    @Published var offlineRemoveMinutes: Int {
+        didSet { UserDefaults.standard.set(offlineRemoveMinutes, forKey: Self.offlineMinutesKey) }
+    }
+
+    private static let hiddenDevicesKey = "hiddenDeviceKeys"
+    private static let offlineSinceKey = "offlineSinceKeys"
+    private static let autoRemoveKey = "autoRemoveOffline"
+    private static let offlineMinutesKey = "offlineRemoveMinutes"
+
+    /// 被删掉的设备：MAC → 删除时间。
+    private var hiddenDeviceKeys: [String: Date] = [:]
+    /// 每台设备「第一次被发现离线」的时刻，用来算自动清理的时长。
+    private var offlineSince: [String: Date] = [:]
+    /// 采集到的全部设备（含被删掉的）。筛选后的才是 `devices`。
+    private var allDevices: [DeviceInfo] = []
 
     /// 风扇控制（gl-fanctrl 插件）。只在打开控制面板时才去问，不跟着轮询跑：
     /// 一份配置要塞十来次 uci，每 2 秒问一次纯属浪费路由器的 CPU。
@@ -109,10 +136,15 @@ final class AppModel: ObservableObject {
     private var lastOcTotalDate: Date?
 
     init() {
+        // 这两个有 didSet，必须在 init 里显式赋值（在 init 里赋值不会触发 didSet）。
+        autoRemoveOffline = UserDefaults.standard.bool(forKey: Self.autoRemoveKey)
+        let storedMinutes = UserDefaults.standard.integer(forKey: Self.offlineMinutesKey)
+        offlineRemoveMinutes = storedMinutes > 0 ? storedMinutes : 60
         pollConfig = PollConfiguration.load()
         loadProfiles()
         loadModules()
         loadDeviceAliases()
+        loadHiddenDevices()
     }
 
     // MARK: - 设备别名
@@ -149,6 +181,75 @@ final class AppModel: ObservableObject {
         if let stored = UserDefaults.standard.dictionary(forKey: "deviceAliases") {
             deviceAliases = stored.compactMapValues { $0 as? String }
         }
+    }
+
+    // MARK: - 删掉离线设备
+
+    /// 当前列表里还能删的（离线的）设备有几台。
+    var offlineDeviceCount: Int {
+        devices.filter { !$0.online }.count
+    }
+
+    /// 删掉指定的设备。**只对离线的生效**——在线的点删除会被忽略，
+    /// 免得手滑把正在用的设备从列表里抹掉（它其实也没法「删」，
+    /// 租约还在、设备还在连，下一轮采集就会回来）。
+    func removeDevices(_ targets: [DeviceInfo]) {
+        let now = Date()
+        var removed = false
+        for device in targets where !device.online {
+            let key = aliasKey(device)
+            hiddenDeviceKeys[key] = now
+            offlineSince.removeValue(forKey: key)
+            removed = true
+        }
+        guard removed else { return }
+        saveHiddenDevices()
+        applyDeviceVisibility()
+    }
+
+    /// 一次清掉当前所有离线设备。
+    func removeOfflineDevices() {
+        removeDevices(devices.filter { !$0.online })
+    }
+
+    /// 把删掉的设备全放回来。设备下次上线其实也会自动回来，
+    /// 这个入口是给「手滑删错」留的后路。
+    func restoreHiddenDevices() {
+        guard !hiddenDeviceKeys.isEmpty else { return }
+        hiddenDeviceKeys.removeAll()
+        offlineSince.removeAll()
+        saveHiddenDevices()
+        applyDeviceVisibility()
+    }
+
+    /// 采集结果 → 可见列表。被删掉的、还没上线的都不进来。
+    private func applyDeviceVisibility() {
+        devices = allDevices.filter { hiddenDeviceKeys[aliasKey($0)] == nil }
+    }
+
+    private func loadHiddenDevices() {
+        hiddenDeviceKeys = Self.loadDateMap(Self.hiddenDevicesKey)
+        offlineSince = Self.loadDateMap(Self.offlineSinceKey)
+        hiddenDeviceCount = hiddenDeviceKeys.count
+    }
+
+    private func saveHiddenDevices() {
+        UserDefaults.standard.set(hiddenDeviceKeys.mapValues { $0.timeIntervalSince1970 },
+                                  forKey: Self.hiddenDevicesKey)
+        UserDefaults.standard.set(offlineSince.mapValues { $0.timeIntervalSince1970 },
+                                  forKey: Self.offlineSinceKey)
+        hiddenDeviceCount = hiddenDeviceKeys.count
+    }
+
+    private static func loadDateMap(_ key: String) -> [String: Date] {
+        guard let stored = UserDefaults.standard.dictionary(forKey: key) else { return [:] }
+        var result: [String: Date] = [:]
+        for (name, value) in stored {
+            if let seconds = value as? Double {
+                result[name] = Date(timeIntervalSince1970: seconds)
+            }
+        }
+        return result
     }
 
     var currentProfile: RouterProfile? {
@@ -756,7 +857,7 @@ final class AppModel: ObservableObject {
             updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         }
         if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "") }
-        if items.contains(.devices) { updateDevices(sections["LEASES"] ?? "") }
+        if items.contains(.devices) { updateDevices(sections) }
         if items.contains(.clashState) {
             openClash = parseOpenClashInfo(sections, current: openClash)
         }
@@ -1429,18 +1530,131 @@ final class AppModel: ObservableObject {
         if let value = fans.max(), value > 0 { stats.fanRPM = value }
     }
 
-    private func updateDevices(_ text: String) {
+    /// 设备列表 = DHCP 租约（名字）+ 三张表（在线）。
+    ///
+    /// 以前只看租约，于是「租出去过」被当成「还连着」：设备关机、平板带走、
+    /// 手机换网，租约还在 12 小时，列表就一直显示在线，标题还写着「N 台在线」。
+    /// 现在每台设备都要在 ARP / 邻居表 / WiFi 关联表里找到活口才算在线，
+    /// 在线的排前面，离线的沉到下面。
+    private func updateDevices(_ sections: [String: String]) {
+        let reachable = parseReachability(neigh: sections["NEIGH"] ?? "",
+                                         arp: sections["ARP"] ?? "",
+                                         sta: sections["STA"] ?? "")
+
         var result: [DeviceInfo] = []
-        for line in text.split(separator: "\n") {
+        for line in (sections["LEASES"] ?? "").split(separator: "\n") {
             let fields = line.split(separator: " ").map(String.init)
             guard fields.count >= 4 else { continue }
+            let ip = fields[2]
+            let mac = fields[1].lowercased()
+            // 有些固件把「永久租约」的 MAC 写成全零，这种行没有意义。
+            guard !mac.isEmpty, mac != "00:00:00:00:00:00" else { continue }
             result.append(DeviceInfo(
-                ip: fields[2],
+                ip: ip,
                 mac: fields[1],
-                name: fields[3] == "*" ? fields[2] : fields[3]
+                name: fields[3] == "*" ? ip : fields[3],
+                online: reachable.ips.contains(ip) || reachable.macs.contains(mac)
             ))
         }
-        devices = result
+
+        // 在线优先，同组内按 IP 末段数字排，192.168.8.9 排在 .100 前面。
+        // 「全部设备」都从同一个位置开始滚，比按租约文件顺序（谁先连谁在前）好找。
+        trackOffline(result)
+        result.sort { lhs, rhs in
+            if lhs.online != rhs.online { return lhs.online }
+            return ipTail(lhs.ip) < ipTail(rhs.ip)
+        }
+        allDevices = result
+        applyDeviceVisibility()
+    }
+
+    /// 维护「离线多久了」，够久就自动删掉；设备重新上线则撤销隐藏。
+    ///
+    /// 计时存本机（不是内存），这样 App 关掉再打开不会把已经离线三小时的设备
+    /// 重新算成「刚离线」，自动清理的规则才说得通。
+    private func trackOffline(_ current: [DeviceInfo]) {
+        let now = Date()
+        var present = Set<String>()
+        var dirty = false
+
+        for device in current {
+            let key = aliasKey(device)
+            present.insert(key)
+            if device.online {
+                if offlineSince.removeValue(forKey: key) != nil { dirty = true }
+                // 设备真回来了就撤销隐藏——不需要用户再去某个设置里「恢复」。
+                if hiddenDeviceKeys.removeValue(forKey: key) != nil { dirty = true }
+            } else if offlineSince[key] == nil {
+                offlineSince[key] = now
+                dirty = true
+            }
+        }
+
+        // 租约已经消失的（换了 IP、路由器重启过），计时也别留着占地方。
+        let before = offlineSince.count
+        offlineSince = offlineSince.filter { present.contains($0.key) }
+        if offlineSince.count != before { dirty = true }
+
+        if autoRemoveOffline {
+            let limit = TimeInterval(max(1, offlineRemoveMinutes) * 60)
+            for (key, since) in offlineSince where now.timeIntervalSince(since) >= limit {
+                if hiddenDeviceKeys[key] == nil {
+                    hiddenDeviceKeys[key] = now
+                    dirty = true
+                }
+            }
+        }
+
+        if dirty { saveHiddenDevices() }
+    }
+
+    /// 从 IP 里取末段数字用于排序；解析不出来就排在最后。
+    private func ipTail(_ ip: String) -> Int {
+        guard let last = ip.split(separator: ".").last else { return .max }
+        return Int(last) ?? .max
+    }
+
+    /// 哪些 IP / MAC 此刻真的在线。
+    private struct Reachability {
+        var ips: Set<String> = []
+        var macs: Set<String> = []
+    }
+
+    private func parseReachability(neigh: String, arp: String, sta: String) -> Reachability {
+        var result = Reachability()
+
+        // WiFi 关联表：station dump 只列出真正握手的客户端，最硬的证据。
+        for line in sta.split(separator: "\n") {
+            let mac = String(line).trimmingCharacters(in: .whitespaces).lowercased()
+            if mac.count == 17 { result.macs.insert(mac) }
+        }
+
+        // 邻居表状态：REACHABLE 是内核刚刚确认过的，DELAY / PROBE 是正在确认；
+        // STALE 只表示「以前通过、最近没流量」，离线设备最常见的残留就是它，
+        // 所以一律不算在线。FAILED / INCOMPLETE 更不算。
+        var sawNeigh = false
+        for line in neigh.split(separator: "\n") {
+            let fields = line.split(separator: " ").map(String.init)
+            guard let ip = fields.first, let state = fields.last else { continue }
+            sawNeigh = true
+            guard ["REACHABLE", "DELAY", "PROBE"].contains(state) else { continue }
+            result.ips.insert(ip)
+            if let idx = fields.firstIndex(of: "lladdr"), idx + 1 < fields.count {
+                result.macs.insert(fields[idx + 1].lowercased())
+            }
+        }
+
+        // 没有 iproute2 的固件：退回 /proc/net/arp，Flags 为 0x2 表示条目完整。
+        // 这条路拿不到状态，STALE 残留会误判为在线，但总比「全员在线」准。
+        if !sawNeigh {
+            for line in arp.split(separator: "\n").dropFirst() {
+                let fields = line.split(separator: " ").map(String.init)
+                guard fields.count >= 4, fields[2] != "0x0" else { continue }
+                result.ips.insert(fields[0])
+                result.macs.insert(fields[3].lowercased())
+            }
+        }
+        return result
     }
 
     private func updateCoreCPU(_ sections: [String: String], into value: inout OpenClashMetrics) {
@@ -1814,9 +2028,25 @@ private extension AppModel {
 
             """
         case .devices:
+            // 租约只说明「发过 IP」，不能说明「还连着」。三处交叉判断：
+            //   NEIGH —— ip neigh 里 REACHABLE/DELAY/PROBE 是内核刚确认过的；
+            //   ARP   —— 没装 iproute2 的精简固件退回 /proc/net/arp；
+            //   STA   —— WiFi 关联表（station dump），真正连着的客户端才有。
+            // 三条命令都很轻，全部失败也只是判不出在线，不会影响列表本身。
             return """
             echo @@LEASES
             cat /tmp/dhcp.leases 2>/dev/null
+            echo @@NEIGH
+            ip -4 neigh show 2>/dev/null
+            echo @@ARP
+            cat /proc/net/arp 2>/dev/null
+            echo @@STA
+            for d in /sys/class/net/*; do
+              n=${d##*/}
+              [ -e "$d/phy80211" ] || continue
+              iw dev "$n" station dump 2>/dev/null | awk '/^Station/{print $2}'
+            done
+            true
 
             """
         case .clashState:

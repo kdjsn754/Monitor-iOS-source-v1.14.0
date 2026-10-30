@@ -38,6 +38,7 @@ struct SettingsView: View {
                         }
                     appearanceCard
                     pollingCard
+                    deviceCard
                     aboutCard
                     dangerCard
                 }
@@ -335,6 +336,77 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    // MARK: - 设备列表
+
+    /// 自动清理离线设备。
+    ///
+    /// 放在设置页而不是「连接设备」面板里：面板是「看一眼现在谁连着」的地方，
+    /// 一个会自动改变列表内容的开关藏在那儿容易被当成一次性按钮。
+    /// 时长做成菜单选择，不做滑条——「离线多久算久」是几档常识值，不是连续量。
+    private var deviceCard: some View {
+        SectionCard("设备列表", icon: "laptopcomputer.and.iphone") {
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("自动清理离线设备")
+                            .font(.subheadline)
+                        Text("离线够久就从列表里移除，不影响路由器租约")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: $model.autoRemoveOffline)
+                        .labelsHidden()
+                }
+
+                if model.autoRemoveOffline {
+                    Divider().opacity(0.5)
+                    HStack(spacing: 10) {
+                        Text("离线超过")
+                            .font(.subheadline)
+                        Spacer(minLength: 8)
+                        Picker("离线超过", selection: $model.offlineRemoveMinutes) {
+                            ForEach(Self.offlineChoices, id: \.self) { minutes in
+                                Text(Self.durationLabel(minutes)).tag(minutes)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                }
+
+                if model.hiddenDeviceCount > 0 {
+                    Divider().opacity(0.5)
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("已隐藏 \(model.hiddenDeviceCount) 台")
+                                .font(.subheadline)
+                            Text("设备重新连上会自动回到列表")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Button("恢复") {
+                            model.restoreHiddenDevices()
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color(.systemBlue))
+                    }
+                }
+            }
+        }
+    }
+
+    private static let offlineChoices = [15, 60, 360, 1440]
+
+    private static func durationLabel(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) 分钟" }
+        if minutes < 1440 { return "\(minutes / 60) 小时" }
+        return "\(minutes / 1440) 天"
     }
 
     // MARK: - 关于

@@ -16,11 +16,24 @@ struct DeviceListView: View {
     @State private var renaming: DeviceInfo?
     @State private var showRename = false
     @State private var draftName = ""
+    /// 待删除的设备：点单个是 1 台，点右上角是全部离线。确认框共用一份，
+    /// 标题和按钮文案按数量变，不用维护两个弹窗状态。
+    @State private var pendingRemove: [DeviceInfo] = []
+    @State private var confirmRemove = false
 
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader("连接设备", caption: headerCaption) {
-                SheetCloseButton { dismiss() }
+                HStack(spacing: 8) {
+                    // 只有存在离线设备时才出现垃圾桶，全在线的时候这里不该有能点的东西。
+                    if model.offlineDeviceCount > 0 {
+                        SheetIconButton(systemImage: "trash", label: "清理离线设备") {
+                            pendingRemove = model.devices.filter { !$0.online }
+                            confirmRemove = true
+                        }
+                    }
+                    SheetCloseButton { dismiss() }
+                }
             }
 
             ScrollView {
@@ -61,38 +74,79 @@ struct DeviceListView: View {
         } message: { device in
             Text("原名 \(device.name) · \(device.ip)。改名只存在这台手机上，路由器那边不受影响。")
         }
+        .confirmationDialog("删除离线设备", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("删除 \(pendingRemove.count) 台设备", role: .destructive) {
+                model.removeDevices(pendingRemove)
+                pendingRemove = []
+            }
+            Button("取消", role: .cancel) { pendingRemove = [] }
+        } message: {
+            // 说清楚「删的是什么」：只删本机列表里的记录，不碰路由器的租约文件。
+            // 设备重新连上会自己回到列表，所以这一步不是不可逆的。
+            Text("只从这台手机的列表里移除，路由器上的租约不受影响。设备重新连上会自己出现。")
+        }
     }
 
     private var headerCaption: String {
-        guard !model.devices.isEmpty else { return "DHCP 租约里还没有设备" }
-        return "\(model.devices.count) 台在线 · 点一行可改名"
+        guard !model.devices.isEmpty else {
+            return model.hiddenDeviceCount > 0
+                ? "已清理 \(model.hiddenDeviceCount) 台离线设备"
+                : "DHCP 租约里还没有设备"
+        }
+        let offline = model.offlineDeviceCount
+        let online = model.devices.count - offline
+        // 以前这里写的是「N 台在线」，数字其实是租约条数。租约 12 小时才过期，
+        // 关掉的设备也算在里面，于是这句标题天天在骗人。现在分开说。
+        if offline == 0 { return "\(online) 台在线 · 点一行可改名" }
+        return "\(online) 台在线 · \(offline) 台离线 · 点一行可改名"
     }
 
+    @ViewBuilder
     private var emptyState: some View {
-        SheetEmptyState(icon: "wifi.slash",
-                        title: "暂无 DHCP 租约设备",
-                        verticalPadding: 34)
+        if model.hiddenDeviceCount > 0 {
+            // 全被清掉的时候不能再说「暂无设备」，否则用户会以为清理把设备弄丢了。
+            SheetEmptyState(icon: "eye.slash",
+                            title: "离线设备已清理",
+                            message: "去「设置 → 设备列表」可以一键恢复",
+                            verticalPadding: 34)
+        } else {
+            SheetEmptyState(icon: "wifi.slash",
+                            title: "暂无 DHCP 租约设备",
+                            verticalPadding: 34)
+        }
     }
 
-    /// 卡片里的一行：名字 + IP · MAC / 铅笔。
-    /// 以前每行单独一圈边框、左边还有一枚蓝底字母头像，和右边的铅笔一左一右，
-    /// 名字被两个圆夹在中间成了配角。现在行合进一张卡，只留右侧铅笔。
+    /// 卡片里的一行：状态点 + 名字 + IP · MAC / 铅笔（离线行多一个垃圾桶）。
+    ///
+    /// 以前整行是一个 Button，右侧只有一个铅笔，想单独删某台离线设备没地方下手。
+    /// 现在文本区和两个图标各自是按钮 —— 点名字改名、点垃圾桶删这台，
+    /// 两个动作互不牵连，也不用做左滑手势（这个面板不是 List，滑不动）。
     private func row(_ device: DeviceInfo) -> some View {
         let name = model.displayName(for: device)
-        return Button {
-            draftName = model.hasAlias(device) ? name : device.name
-            renaming = device
-            showRename = true
-        } label: {
-            HStack(spacing: 11) {
+        return HStack(spacing: 10) {
+            Button {
+                beginRename(device, name)
+            } label: {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(spacing: 6) {
+                        // 6pt 的小圆点：绿=此刻真连着，灰=只有租约、人已经走了。
+                        // 不用色块也不用边框，一行里只让这一个点变色。
+                        Circle()
+                            .fill(device.online ? Color.green : Color(.systemGray3))
+                            .frame(width: 6, height: 6)
+                        Text(name)
+                            .font(.subheadline.weight(.medium))
+                            // 离线行整块压一档，扫一眼就能分出在线与离线两组。
+                            .foregroundStyle(device.online
+                                             ? Color(uiColor: .label)
+                                             : Color.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                     // IP 和 MAC 拆成两列：IP 给一个固定宽度（13 个等宽字符放得下），
                     // 后面那个「·」和 MAC 因此每行都从同一个 x 起步。
+                    // 12pt 左缩进是为了跟上一行的名字左边缘对齐——圆点单独悬在左边，
+                    // 名字和 IP 都从同一条线开始，四行扫下来不会一边多一块一边少一块。
                     HStack(spacing: 6) {
                         Text(device.ip)
                             .frame(minWidth: 88, alignment: .leading)
@@ -102,22 +156,50 @@ struct DeviceListView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .padding(.leading, 12)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(name)，\(device.ip)，点按重命名")
 
-                Spacer(minLength: 4)
+            if !device.online {
+                Button {
+                    pendingRemove = [device]
+                    confirmRemove = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Color(.tertiarySystemFill), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("删除 \(name)")
+            }
 
+            Button {
+                beginRename(device, name)
+            } label: {
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .frame(width: 26, height: 26)
                     .background(Color(.tertiarySystemFill), in: Circle())
+                    .contentShape(Circle())
             }
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("重命名 \(name)")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(name)，\(device.ip)，点按重命名")
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+    }
+
+    private func beginRename(_ device: DeviceInfo, _ name: String) {
+        draftName = model.hasAlias(device) ? name : device.name
+        renaming = device
+        showRename = true
     }
 }
