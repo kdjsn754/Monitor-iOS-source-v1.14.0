@@ -380,11 +380,25 @@ struct SheetListCard<Content: View>: View {
 struct SheetSectionCard<Content: View>: View {
     let title: String
     let icon: String
+    /// 标题行右侧的「小挂件」：状态胶囊、开关之类。
+    /// 用 AnyView 是为了不再多一个泛型参数——那样每个调用点都要跟着改；
+    /// 不传时就是 nil，渲染逻辑里直接跳过，和原来完全一致。
+    let accessory: AnyView?
     let content: Content
 
     init(_ title: String, icon: String, @ViewBuilder content: () -> Content) {
         self.title = title
         self.icon = icon
+        self.accessory = nil
+        self.content = content()
+    }
+
+    init<Trailing: View>(_ title: String, icon: String,
+                        @ViewBuilder accessory: () -> Trailing,
+                        @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.accessory = AnyView(accessory())
         self.content = content()
     }
 
@@ -396,7 +410,8 @@ struct SheetSectionCard<Content: View>: View {
                     .foregroundStyle(.blue)
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                Spacer(minLength: 0)
+                Spacer(minLength: 6)
+                if let accessory { accessory }
             }
             content
         }

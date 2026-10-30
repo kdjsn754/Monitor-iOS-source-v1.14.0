@@ -70,7 +70,7 @@ struct FanControlView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("会把接管关掉、曲线恢复成 70/76/88 °C，风扇交回官方 gl_fan 服务。")
+            Text("会把接管关掉、曲线恢复成 70/76/88 °C，风扇交回官方温控。")
         }
     }
 
@@ -89,22 +89,27 @@ struct FanControlView: View {
         }
     }
 
+    /// 标题下面那行小字。**只写中文**：以前是「gl-fanctrl · 已接管 · 自动模式」，
+    /// 插件名顶在最前面，每次进来第一眼先读一串英文缩写，真正要看的「谁在管、什么模式」
+    /// 被挤到后面。插件名本来就在卡片和安装提示里出现过，这里不需要再报一遍。
     private var headerCaption: String {
         guard model.fan.loaded else { return "正在读取插件状态…" }
-        guard model.fan.installed else { return "路由器上没找到 gl-fanctrl" }
+        guard model.fan.installed else { return "路由器上没找到这个插件" }
         // 只剩这里说一句状态。接管开着但守护进程不在，是最危险的组合：
         // 官方服务已停、插件进程又没起来，风扇没人管——所以这一条要压过常规文案。
         if model.fan.enabled && !model.fan.pluginRunning {
             return "已接管 · 但没检测到守护进程，风扇可能没人管"
         }
-        let takeover = model.fan.enabled ? "已接管" : "未接管"
-        return "gl-fanctrl · \(takeover) · \(model.fan.mode.title)模式"
+        return model.fan.enabled
+            ? "插件接管中 · \(model.fan.mode.title)模式"
+            : "风扇由官方温控在管 · \(model.fan.mode.title)模式"
     }
 
     // MARK: - 状态
 
     private var statusCard: some View {
-        SheetSectionCard("当前状态", icon: "fanblades") {
+        SheetSectionCard("当前状态", icon: "fanblades",
+                         accessory: { controlPill }) {
             VStack(spacing: 12) {
                 HStack(spacing: 8) {
                     statTile("温度", value: model.fan.temperature.map { String(format: "%.0f°", $0) } ?? "—", color: .teal)
@@ -156,33 +161,79 @@ struct FanControlView: View {
         .softTile(color, radius: 11)
     }
 
+    /// 标题行右上角那枚小胶囊：一眼看出风扇此刻归谁管。
+    ///
+    /// 以前这层信息只在标题下面一行小字里，和「自动模式」挤在一起；
+    /// 现在挪成一个常驻标签，位置固定，扫一眼就行，不用读句子。
+    private var controlPill: some View {
+        let taken = model.fan.enabled
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(taken ? Color.blue : Color(.systemGray3))
+                .frame(width: 5, height: 5)
+            Text(taken ? "插件接管" : "官方温控")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(taken ? Color.blue : Color.secondary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Color(.secondarySystemFill), in: Capsule())
+    }
+
+    /// 状态小胶囊（接管卡里那两个）。
+    /// 只写中文、只留「在不在跑」这一层信息：副词、解释、警告一律不进胶囊。
+    private func stateChip(_ title: String, tone: Color, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(active ? tone : Color(.systemGray3))
+                .frame(width: 5, height: 5)
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(active ? tone : Color.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .softTile(active ? tone : Color(.systemGray), in: Capsule())
+    }
+
     // MARK: - 接管
 
-    /// 接管：一行标题 + 一个开关，就这两样。
+    /// 一行标题 + 右侧开关，下面跟两个状态胶囊。
     ///
-    /// 之前底下还挂着「官方 gl_fan 已停止…」的副标题、两个运行状态小胶囊和一段警告，
-    /// 四层信息压在一个 Toggle 上，用户只想开个风扇却要先读三行解释。
-    /// 这里只留开关；守护进程没起来的提醒收进面板标题下那行小字
-    /// （`headerCaption` 只在「接管开着但进程不在」时显示告警），不再在卡片里堆字。
+    /// v1.28.14 曾把胶囊全删掉（那时底下还压着副标题和一段警告，四层信息挤在一个
+    /// 开关上）。现在副标题和警告都不在了，只留两个胶囊回答「守护进程在不在跑」，
+    /// 比让用户自己去标题小字里找要快。
     private var takeoverCard: some View {
-        SheetSectionCard("接管", icon: "hand.raised") {
-            Toggle(isOn: Binding(
-                get: { model.fan.enabled },
-                set: { value in Task { await model.setFanEnabled(value) } }
-            )) {
-                Text("由插件接管风扇")
-                    .font(.subheadline)
+        SheetSectionCard("由插件接管风扇", icon: "hand.raised",
+                         accessory: {
+                             Toggle("由插件接管风扇", isOn: Binding(
+                                 get: { model.fan.enabled },
+                                 set: { value in Task { await model.setFanEnabled(value) } }
+                             ))
+                             .labelsHidden()
+                             .tint(.blue)
+                             .disabled(model.fanBusy)
+                         }) {
+            HStack(spacing: 6) {
+                stateChip(model.fan.pluginRunning ? "守护进程运行" : "守护进程未运行",
+                          tone: .blue,
+                          active: model.fan.pluginRunning)
+                stateChip(model.fan.enabled ? "官方温控已停" : "官方温控在管",
+                          tone: .green,
+                          active: !model.fan.enabled)
+                Spacer(minLength: 0)
+                if model.fanBusy {
+                    ProgressView().controlSize(.mini)
+                }
             }
-            .tint(.blue)
-            .disabled(model.fanBusy)
         }
     }
 
     // MARK: - 模式
 
     private var modeCard: some View {
-        SheetSectionCard("控制模式", icon: "slider.horizontal.3") {
-            Picker("控制模式", selection: Binding(
+        SheetSectionCard("风扇模式", icon: "slider.horizontal.3") {
+            Picker("风扇模式", selection: Binding(
                 get: { model.fan.mode },
                 set: { value in Task { await model.setFanMode(value) } }
             )) {
