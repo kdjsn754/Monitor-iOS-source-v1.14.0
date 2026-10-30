@@ -291,42 +291,6 @@ enum PollItem: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var title: String {
-        switch self {
-        case .core: return "CPU / 内存 / 网速"
-        case .sensors: return "温度 / 风扇"
-        case .flash: return "闪存空间"
-        case .devices: return "在线设备"
-        case .clashState: return "OpenClash 状态与配置"
-        case .clashTraffic: return "OpenClash 实时流量"
-        case .clashConnections: return "连接数与内核状态"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .core: return "CPU、内存、上下行、负载、运行时间"
-        case .sensors: return "thermal / hwmon 里的温度与风扇转速"
-        case .flash: return "系统、应用程序与可用空间"
-        case .devices: return "DHCP 租约里的设备列表"
-        case .clashState: return "是否运行、代理模式、配置文件、面板端口"
-        case .clashTraffic: return "实时上下行，来自内核 /traffic 接口"
-        case .clashConnections: return "累计流量、连接数、内核内存与 CPU"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .core: return "cpu"
-        case .sensors: return "thermometer.medium"
-        case .flash: return "internaldrive"
-        case .devices: return "laptopcomputer.and.iphone"
-        case .clashState: return "shield.lefthalf.filled"
-        case .clashTraffic: return "arrow.up.arrow.down"
-        case .clashConnections: return "point.3.connected.trianglepath.dotted"
-        }
-    }
-
     /// 是否跟着刷新间隔反复采集。
     /// OpenClash 的模式和配置文件列表要问 7 次 uci，只在进入代理页时取一次，
     /// 之后每轮只确认运行状态和面板端口，省下的都是路由器的 CPU。

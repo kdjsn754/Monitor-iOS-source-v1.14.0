@@ -69,24 +69,9 @@ struct DeviceListView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "wifi.slash")
-                .font(.system(size: 22))
-                .foregroundStyle(.tertiary)
-            Text("暂无 DHCP 租约设备")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 34)
-        .background(
-            Color(.systemBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
-        }
+        SheetEmptyState(icon: "wifi.slash",
+                        title: "暂无 DHCP 租约设备",
+                        verticalPadding: 34)
     }
 
     /// 卡片里的一行：名字 + IP · MAC / 铅笔。

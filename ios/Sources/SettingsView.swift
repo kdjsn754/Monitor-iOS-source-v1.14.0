@@ -595,28 +595,9 @@ private struct RouterSwitcherSheet: View {
     }
 
     private var emptyCard: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "router")
-                .font(.system(size: 22))
-                .foregroundStyle(.tertiary)
-            Text("还没有保存过连接")
-                .font(.subheadline.weight(.medium))
-            Text("回到设置页点「新建连接」，填好路由器地址和密码即可")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
-        .padding(.horizontal, 16)
-        .background(
-            Color(.systemBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
-        }
+        SheetEmptyState(icon: "router",
+                        title: "还没有保存过连接",
+                        message: "回到设置页点「新建连接」，填好路由器地址和密码即可")
     }
 
     private func row(_ profile: RouterProfile) -> some View {

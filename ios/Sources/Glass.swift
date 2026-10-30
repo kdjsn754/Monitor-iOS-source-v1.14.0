@@ -97,37 +97,28 @@ extension View {
 /// 而外层卡片是 `secondarySystemGroupedBackground`（#1C1C1E），黑行压在深灰卡上
 /// 会像挖了一个洞，行与卡片的边界比文字还抢眼。深色用 `tertiarySystemBackground`
 /// （#2C2C2E）比卡片亮一档，层级才对。
-/// `emphasized` 只给「当前选中的那一行」用：不铺蓝底，只把边线换成主色。
-struct RowTileModifier<S: InsettableShape>: ViewModifier {
-    let shape: S
-    var emphasized: Bool = false
+struct RowTileModifier: ViewModifier {
+    var radius: CGFloat = 14
 
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
-        content
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return content
             .background {
                 shape.fill(colorScheme == .dark
                            ? Color(.tertiarySystemBackground)
                            : Color(.systemBackground))
             }
             .overlay {
-                shape.strokeBorder(
-                    emphasized ? Color.blue.opacity(0.5) : Color(.separator),
-                    lineWidth: emphasized ? 1.3 : 0.75
-                )
+                shape.strokeBorder(Color(.separator), lineWidth: 0.75)
             }
     }
 }
 
 extension View {
-    func rowTile<S: InsettableShape>(in shape: S, emphasized: Bool = false) -> some View {
-        modifier(RowTileModifier(shape: shape, emphasized: emphasized))
-    }
-
-    func rowTile(radius: CGFloat = 14, emphasized: Bool = false) -> some View {
-        rowTile(in: RoundedRectangle(cornerRadius: radius, style: .continuous),
-                emphasized: emphasized)
+    func rowTile(radius: CGFloat = 14) -> some View {
+        modifier(RowTileModifier(radius: radius))
     }
 }
 
@@ -270,48 +261,6 @@ struct GlassProminentButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .background(Color.blue, in: Capsule())
             .opacity(configuration.isPressed ? 0.82 : 1)
-    }
-}
-
-/// 居中的对话框容器：一层半透明遮罩把背后的页面压暗，中间放一张圆角卡片。///
-/// 以前「连接设备 / 选择配置文件 / 切换连接」都是底部浮层（`.sheet` + 拖拽条），
-/// 在 iPhone 上只能从底边长出来、还常把最后一行内容压在下面。改成这种居中弹窗后，
-/// 内容是浮在页面正中的卡片，四周留白一致，文字和对齐也好排；点遮罩任意处即可关闭。
-struct CenteredModal<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { dismiss() }
-
-            content()
-                .frame(maxWidth: 460)
-                .padding(.horizontal, 16)
-        }
-    }
-}
-
-/// 居中对话框用的卡片底：和页面卡片同一套白底 + 细边，外加一圈柔和的投影
-/// 把它从遮罩里「托」起来，看着像浮在上面的面板而不是贴上去的。
-struct ModalCard<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        content()
-            .background(
-                Color(.secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .shadow(color: .black.opacity(0.16), radius: 30, y: 14)
     }
 }
 
@@ -473,5 +422,43 @@ struct SheetRowDivider: View {
             .fill(Color(.separator).opacity(0.6))
             .frame(height: 0.5)
             .padding(.leading, leading)
+    }
+}
+
+/// 面板里的空状态：图标 + 一行主文 +（可选）说明，白底 + 细边。
+///
+/// 以前「切换连接」和「连接设备」各自手写了一份几乎一样的空状态，
+/// 底色还一个白一个灰；抽出来之后两个面板的空状态终于是同一个东西。
+struct SheetEmptyState: View {
+    let icon: String
+    let title: String
+    var message: String?
+    var verticalPadding: CGFloat = 30
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 22))
+                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.subheadline.weight(.medium))
+            if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, verticalPadding)
+        .padding(.horizontal, 16)
+        .background(
+            Color(.systemBackground),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
     }
 }

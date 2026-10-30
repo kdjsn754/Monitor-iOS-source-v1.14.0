@@ -25,6 +25,12 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: OpenWrt 监控
+        # ⚠️ 不写这两行，XcodeGen 会把它自己的默认值「1.0 / 1」写进 Info.plist，
+        # 直接把 settings 里的 MARKETING_VERSION 盖掉——「关于」页和签名工具里
+        # 永远显示 v1.0 (1) 就是这么来的（2026-10-31 实际踩过）。
+        # 打包时由 Xcode 把 $(...) 展开成当前版本号，别写成常量。
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: 用于通过 SSH 连接局域网内的 OpenWrt 路由器
         NSBonjourServices:
           - _ssh._tcp
@@ -50,8 +56,8 @@ targets:
         # 模块名带歪（改了模块名，所有源文件都不需要动，但 import 会变）。
         PRODUCT_MODULE_NAME: OpenWrtMonitor
         PRODUCT_BUNDLE_IDENTIFIER: com.catmint.openwrtmonitor
-        MARKETING_VERSION: 1.28.13
-        CURRENT_PROJECT_VERSION: 54
+        MARKETING_VERSION: 1.28.14
+        CURRENT_PROJECT_VERSION: 55
         SWIFT_VERSION: 5.9
         IPHONEOS_DEPLOYMENT_TARGET: 17.0
         CODE_SIGN_STYLE: Manual

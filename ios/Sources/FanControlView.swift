@@ -92,6 +92,11 @@ struct FanControlView: View {
     private var headerCaption: String {
         guard model.fan.loaded else { return "正在读取插件状态…" }
         guard model.fan.installed else { return "路由器上没找到 gl-fanctrl" }
+        // 只剩这里说一句状态。接管开着但守护进程不在，是最危险的组合：
+        // 官方服务已停、插件进程又没起来，风扇没人管——所以这一条要压过常规文案。
+        if model.fan.enabled && !model.fan.pluginRunning {
+            return "已接管 · 但没检测到守护进程，风扇可能没人管"
+        }
         let takeover = model.fan.enabled ? "已接管" : "未接管"
         return "gl-fanctrl · \(takeover) · \(model.fan.mode.title)模式"
     }
@@ -124,17 +129,6 @@ struct FanControlView: View {
                         }
                     }
                 }
-
-                // 面板开着的时候这两个数字每 2 秒自己刷一次，说明一句，
-                // 免得用户以为是「进来那一刻的死值」。
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text("温度与转速每 2 秒自动刷新")
-                        .font(.system(size: 10))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.tertiary)
             }
         }
     }
@@ -164,63 +158,24 @@ struct FanControlView: View {
 
     // MARK: - 接管
 
+    /// 接管：一行标题 + 一个开关，就这两样。
+    ///
+    /// 之前底下还挂着「官方 gl_fan 已停止…」的副标题、两个运行状态小胶囊和一段警告，
+    /// 四层信息压在一个 Toggle 上，用户只想开个风扇却要先读三行解释。
+    /// 这里只留开关；守护进程没起来的提醒收进面板标题下那行小字
+    /// （`headerCaption` 只在「接管开着但进程不在」时显示告警），不再在卡片里堆字。
     private var takeoverCard: some View {
         SheetSectionCard("接管", icon: "hand.raised") {
-            VStack(spacing: 10) {
-                Toggle(isOn: Binding(
-                    get: { model.fan.enabled },
-                    set: { value in Task { await model.setFanEnabled(value) } }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("由插件接管风扇")
-                            .font(.subheadline)
-                        Text(model.fan.enabled
-                             ? "官方 gl_fan 已停止，风扇归 gl-fanctrl 守护进程管"
-                             : "官方 gl_fan 在管，插件不干预")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .tint(.blue)
-                .disabled(model.fanBusy)
-
-                Divider().opacity(0.5)
-
-                HStack(spacing: 6) {
-                    serviceChip("守护进程", running: model.fan.pluginRunning)
-                    serviceChip(model.fan.enabled ? "已接管" : "未接管", running: model.fan.enabled)
-                    Spacer(minLength: 0)
-                    if model.fanBusy {
-                        ProgressView().controlSize(.mini)
-                    }
-                }
-
-                // 最危险的组合：开关是开的，但守护进程不在了。这时官方服务已经被停掉，
-                // 插件的进程又没起来——风扇没有任何人在管。这句话必须显眼。
-                if model.fan.enabled && !model.fan.pluginRunning {
-                    Text("接管开着，但没检测到 gl-fanctrl 守护进程——风扇此刻可能没人管。点右上角刷新，或先关掉接管交回官方服务。")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            Toggle(isOn: Binding(
+                get: { model.fan.enabled },
+                set: { value in Task { await model.setFanEnabled(value) } }
+            )) {
+                Text("由插件接管风扇")
+                    .font(.subheadline)
             }
+            .tint(.blue)
+            .disabled(model.fanBusy)
         }
-    }
-
-    private func serviceChip(_ title: String, running: Bool) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(running ? Color.green : Color(.systemGray3))
-                .frame(width: 6, height: 6)
-            Text("\(title)\(running ? "运行" : "停止")")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .rowTile(in: Capsule())
     }
 
     // MARK: - 模式
