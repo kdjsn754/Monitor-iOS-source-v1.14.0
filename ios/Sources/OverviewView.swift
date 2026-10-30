@@ -7,7 +7,10 @@ struct OverviewView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 14) {
+                // 这里原来是 LazyVStack。卡片一共就 7 张，懒加载省不下什么，
+                // 但滑到底部继续往上拖时，LazyVStack 会按估算高度补内容、松手再按真实高度
+                // 收回，于是「松手跳一下」。换成 VStack 后高度一次算清，不会再跳。
+                VStack(spacing: 14) {
                     PageHeader("概览") {
                         HeaderButton("arrow.clockwise") {
                             Task { await model.manualRefresh() }
@@ -36,7 +39,9 @@ struct OverviewView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            RouterGlyph(size: 28)
+            // 这枚线稿的墨迹占满方框宽度、高度只有 70%，所以 28 画出来实际只有 20 高，
+            // 比右边两行文字矮一截，看着像「贴上去的小图标」。36 才和两行文字等高。
+            RouterGlyph(size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.routerInfo.model.isEmpty ? "OpenWrt" : model.routerInfo.model)
                     .font(.headline)
@@ -593,51 +598,49 @@ private struct RingGauge: View {
 
 /// 会转的风扇叶轮：转速越高转得越快，停转时静止。
 ///
-/// 用「重复的旋转动画」而不是按帧重绘：动画由渲染进程（Core Animation）执行，
-/// App 不会为此每秒重画一次界面——概览页本来就是靠降低重绘量压 CPU 的。
-/// 时长只分四档，档位变了才用 .id 重建转子、从 0 度重新起转，
-/// 避免「改了时长但旧动画还在跑」导致的忽快忽慢。
+/// 以前是「四档 + `.id(period)` 重建 + repeatForever」：最快一档 0.42 秒一圈，
+/// 18pt 的叶轮在手机上不是「转」而是「抖」，而且每跨一次档位就从 0 度重来，看着像抽了一下。
+/// 现在改成：
+///   · 速度随转速**连续**变化（每秒 0.22~0.64 圈），不再有档位；
+///   · 角度直接由当前时间算出来，换速度只是换个斜率，不会跳回 0 度；
+///   · 每秒最多重绘 20 帧，比逐帧动画省，也比原来那种「快到发虚」看得清。
 private struct FanBlades: View {
     let rpm: Double
     let color: Color
     var size: CGFloat = 18
 
-    /// 一圈用多久：600 RPM 转一圈 1.5 秒，2400 往上接近 0.4 秒一圈。
-    private var period: Double {
-        switch rpm {
-        case ..<900: return 1.5
-        case ..<1600: return 0.95
-        case ..<2400: return 0.62
-        default: return 0.42
-        }
-    }
-
-    var body: some View {
-        Rotor(period: period, color: color, size: size)
-            .id(period)
-    }
-}
-
-private struct Rotor: View {
-    let period: Double
-    let color: Color
-    let size: CGFloat
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var angle: Double = 0
+
+    /// 每秒转多少圈。3000 RPM 封顶，再快也不加速——屏幕上已经分不出来了。
+    private var turnsPerSecond: Double {
+        let normalized = min(max(rpm, 0), 3000) / 3000
+        return 0.22 + normalized * 0.42
+    }
 
     var body: some View {
+        Group {
+            if reduceMotion {
+                blades(angle: 0)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+                    blades(angle: angle(at: context.date))
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func blades(angle: Double) -> some View {
         Image(systemName: "fanblades.fill")
             .font(.system(size: size, weight: .medium))
             .foregroundStyle(color)
             .rotationEffect(.degrees(angle))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.linear(duration: period).repeatForever(autoreverses: false)) {
-                    angle = 360
-                }
-            }
-            .accessibilityHidden(true)
+    }
+
+    /// 相位只跟时间有关，视图重建多少次都接着上一帧转。
+    private func angle(at date: Date) -> Double {
+        let turns = date.timeIntervalSinceReferenceDate * turnsPerSecond
+        return (turns - turns.rounded(.down)) * 360
     }
 }
 

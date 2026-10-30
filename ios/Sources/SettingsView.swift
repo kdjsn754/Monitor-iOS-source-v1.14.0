@@ -81,9 +81,10 @@ struct SettingsView: View {
                             .fill(Color.blue.opacity(0.10))
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .strokeBorder(Color.blue.opacity(0.22), lineWidth: 1)
-                        // 与桌面图标同一枚线稿；24pt 是这套图形的细节下限，
-                        // 再小就只能保留盒子、天线和两道弧了。
-                        RouterGlyph(size: 26)
+                        // 与桌面图标同一枚线稿。58pt 的方块里放 26pt 时，
+                        // 因为墨迹只有框高的七成，实际看着只有方块的 1/3 大，
+                        // 四周空得发虚；38pt 才填到合适的分量。
+                        RouterGlyph(size: 38)
                     }
                     .frame(width: 58, height: 58)
 
@@ -609,8 +610,8 @@ private struct RouterSwitcherSheet: View {
                             .frame(width: 36, height: 36)
                         // 原来靠「实心 / 空心」区分当前连接，线稿没有实心版，
                         // 改用颜色：当前那台给主色，其余降到次要灰。
-                        // 19pt 是这套图形在 36pt 圆角底里还能看清两道弧的最小尺寸。
-                        RouterGlyph(size: 19,
+                        // 24pt：墨迹占满宽度、只有 17 高，19pt 时看着比旁边的标题还小。
+                        RouterGlyph(size: 24,
                                     tint: isCurrent ? Color.blue : Color.secondary)
                     }
 

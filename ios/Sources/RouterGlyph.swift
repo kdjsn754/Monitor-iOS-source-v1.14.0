@@ -61,8 +61,11 @@ private enum RouterGeometry {
 
     /// 朝上凸的圆弧：圆心一定在弦的下方。
     ///
-    /// 全部用 Double 算：SwiftUI 的 `Angle(radians:)` 只吃 Double，
-    /// 而 `hypot` 也没有 CGFloat 重载，混着写会编译不过。
+    /// 这里**不用** `Path.addArc(center:radius:startAngle:endAngle:clockwise:)`。
+    /// 那个 API 的 `clockwise` 在 SwiftUI 的翻转坐标系里方向是反的：起角 -129°、
+    /// 终角 -51° 时它不会走「经过 -90°（正上方）」的那一小段，而是绕远路从下方兜一圈，
+    /// 两道弧于是变成一只闭合的「眼睛」——2026-10-30 实机上就是这个样子。
+    /// 改成按角度等分取点连折线：方向由我们自己定，48 段在 34pt 下已经看不出棱角。
     static func addArc(_ path: inout Path, from a: CGPoint, to b: CGPoint, radius: CGFloat) {
         let ax = Double(a.x), ay = Double(a.y)
         let bx = Double(b.x), by = Double(b.y)
@@ -70,16 +73,20 @@ private enum RouterGeometry {
 
         let mx = (ax + bx) / 2, my = (ay + by) / 2
         let half = ((bx - ax) * (bx - ax) + (by - ay) * (by - ay)).squareRoot() / 2
-        let height = max(0, r * r - half * half).squareRoot()
+        // 半径比弦还短时开方会得到 NaN，夹一下免得整条路径失效。
+        let height = (max(0, r * r - half * half)).squareRoot()
         // 圆心在弦的下方（y 越大越靠下），弧才是往上凸的。
         let cy = my + height
 
         let start = atan2(ay - cy, ax - mx)
         let end = atan2(by - cy, bx - mx)
-        // 角度递增的方向在屏幕上是顺时针；从起角走到终角会经过 -90°（正上方）。
-        path.addArc(center: CGPoint(x: mx, y: cy), radius: radius,
-                    startAngle: .radians(start), endAngle: .radians(end),
-                    clockwise: false)
+
+        let steps = 48
+        for i in 0...steps {
+            let t = start + (end - start) * Double(i) / Double(steps)
+            let point = CGPoint(x: mx + r * cos(t), y: cy + r * sin(t))
+            if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
     }
 }
 

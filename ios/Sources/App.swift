@@ -167,16 +167,24 @@ struct MainTabs: View {
     @State private var selection = 0
 
     var body: some View {
+        // 系统 TabView 只当作「页面容器」用：它负责保留每一页的滚动位置和弹窗状态，
+        // 但底下那条栏由我们自绘（见 AppTabBar），这样才能做到
+        // 「选中后图标变实心」—— 系统的 .tabItem 只有一种图，给不了选中态。
         TabView(selection: $selection) {
             OverviewView()
-                .tabItem { Label("概览", systemImage: "square.grid.2x2") }
                 .tag(0)
+                .toolbar(.hidden, for: .tabBar)
             ProxyView()
-                .tabItem { Label("代理", systemImage: "globe") }
                 .tag(1)
+                .toolbar(.hidden, for: .tabBar)
             SettingsView()
-                .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
                 .tag(2)
+                .toolbar(.hidden, for: .tabBar)
+        }
+        // 用 safeAreaInset 而不是 overlay：这样每页的 ScrollView 会自动把
+        // 底部留出栏的高度，内容不会被栏压住，也不会在滑到底时钻到栏底下。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AppTabBar(selection: $selection)
         }
         // 采集跟着页面走：切到哪一页就只采那一页要用的数据，设置页完全不采。
         .onChange(of: selection) { _, value in
@@ -185,6 +193,67 @@ struct MainTabs: View {
         .onAppear {
             model.setActivePage(AppPage(tab: selection))
         }
+    }
+}
+
+/// 自绘的底部导航栏。
+///
+/// 三枚图标都是「空心 / 实心」一对：没选中画空心，选中画实心并转成主色。
+/// 不给选中项铺浅色胶囊——那层淡蓝底和页面里的卡片打架，实心图标本身就够表明状态了。
+struct AppTabBar: View {
+    @Binding var selection: Int
+
+    /// 顺序即标签顺序：图标、实心底图、标题。
+    private let items: [(icon: String, filled: String, title: String)] = [
+        ("square.grid.2x2", "square.grid.2x2.fill", "概览"),
+        ("shield", "shield.fill", "代理"),
+        ("gearshape", "gearshape.fill", "设置")
+    ]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                itemView(index: index, item: item)
+            }
+        }
+        .padding(5)
+        .background {
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color(.separator).opacity(0.45), lineWidth: 0.5)
+                }
+        }
+        .padding(.horizontal, 44)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+        .animation(.easeOut(duration: 0.16), value: selection)
+    }
+
+    private func itemView(index: Int, item: (icon: String, filled: String, title: String)) -> some View {
+        let isSelected = selection == index
+        return Button {
+            guard !isSelected else { return }
+            selection = index
+        } label: {
+            VStack(spacing: 3) {
+                // 统一框高：三枚符号的自带高度不一样（gearshape 比 shield 略高），
+                // 不框住的话选中切换时文字会上下抖一两个点。
+                Image(systemName: isSelected ? item.filled : item.icon)
+                    .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
+                    .frame(height: 21)
+                Text(item.title)
+                    .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
+            }
+            .foregroundStyle(isSelected ? Color.blue : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }
 }
 
@@ -201,7 +270,7 @@ struct LoginView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 12) {
                     // 和桌面图标同一枚线稿（见 RouterGlyph），不再用 SF Symbols 的路由器。
-                    RouterGlyph(size: 30)
+                    RouterGlyph(size: 34)
                         .frame(width: 54, height: 54)
                         .softTile(.blue, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
