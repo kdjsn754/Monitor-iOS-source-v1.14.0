@@ -73,6 +73,11 @@ on:
 permissions:
   contents: read
 
+# ⚠️ 写这个文件里的 shell 时，变量紧挨着中文/全角标点必须写成 ${var}。
+# macOS 运行器的 /bin/bash 是 3.2，不认 UTF-8：`$app（` 会把「（」的第一个字节
+# 当成变量名的一部分，去找一个叫 `app\xef` 的变量；因为脚本开头有 set -u，
+# 于是直接 `app?: unbound variable` 报错退出（2026-10-30 实际踩过一次）。
+
 concurrency:
   group: ios-ipa-${{ github.ref }}
   cancel-in-progress: true
@@ -179,7 +184,7 @@ jobs:
           if [ -f "$sdkp" ]; then
             echo "  Version = $(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdkp" 2>/dev/null || echo '?')"
           else
-            echo "  （没找到 $sdkp）"
+            echo "  （没找到 ${sdkp}）"
           fi
           echo "以上都只是文件读取，不会卡；SDK 的正式校验在后面的「检查 iOS SDK」。"
 
@@ -195,7 +200,7 @@ jobs:
       # 停在第 27.0 那个（循环按字母序，第一个赢）。所以按「主版本.次版本」算分。
       #
       # 注意：pick() 的诊断行必须走 stderr。`best="$(pick)"` 会把 stdout 全部当成
-      # 返回值，原来的 `echo "发现 ..."` 会一起被塞进 $best，让 xcode-select 拿到
+      # 返回值，原来的 `echo "发现 ..."` 会一起被塞进 ${best}，让 xcode-select 拿到
       # 一串多行垃圾文本、静默失败（set -u 不拦，步骤还显示成功）。
       - name: 选择机器上最新的 Xcode
         timeout-minutes: 12
@@ -225,7 +230,7 @@ jobs:
                 *beta*|*Beta*|*BETA*) key=$(( raw * 2 - 1 )) ;;   # 同一版本里排后面
                 *)                     key=$(( raw * 2 )) ;;
               esac
-              echo "发现 $app（$v，权重 $key）" >&2   # 走 stderr，别污染 return 值
+              echo "发现 ${app}（${v}，权重 ${key}）" >&2   # 走 stderr，别污染 return 值
               if [ "$key" -gt "$best_key" ]; then
                 best="$app"
                 best_key="$key"
@@ -273,18 +278,18 @@ jobs:
           case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
           echo "检测到 iphoneos SDK: $sdk"
           if [ "$major" -lt 26 ]; then
-            echo "::error::当前 iOS SDK 是 $sdk（低于 26）。用它打出来的包在新机型上会被系统按兼容模式运行，屏幕上下有黑边。请改用 xcode-27 运行器（macOS 27 + Xcode 27）。"
+            echo "::error::当前 iOS SDK 是 ${sdk}（低于 26）。用它打出来的包在新机型上会被系统按兼容模式运行，屏幕上下有黑边。请改用 xcode-27 运行器（macOS 27 + Xcode 27）。"
             exit 1
           fi
           if [ "$major" -lt 27 ]; then
-            echo "::warning::iOS SDK 是 $sdk（低于 27）。系统会按「默认兼容」档运行：整个界面缩在一个旧尺寸窗口里，上下仍有黑边。把运行器换成 xcode-27 才能真正铺满。"
+            echo "::warning::iOS SDK 是 ${sdk}（低于 27）。系统会按「默认兼容」档运行：整个界面缩在一个旧尺寸窗口里，上下仍有黑边。把运行器换成 xcode-27 才能真正铺满。"
             {
               echo ""
               echo "> ⚠️ 本次打包用的是 iOS $sdk SDK（< 27）：系统会把界面放进旧尺寸兼容窗口，上下仍会留黑边。"
               echo "> 想彻底去掉黑边，请把运行器换成 **xcode-27**（macOS 27 + Xcode 27）重新打包。"
             } >> "$GITHUB_STEP_SUMMARY"
           elif [ "$minor" -lt 1 ]; then
-            echo "::warning::iOS SDK 是 $sdk（27.0）。这一档是「过渡适配」：窗口已经铺到屏幕边缘，但偶尔还能看到一条极细的边；27.1 起才算完全铺满。"
+            echo "::warning::iOS SDK 是 ${sdk}（27.0）。这一档是「过渡适配」：窗口已经铺到屏幕边缘，但偶尔还能看到一条极细的边；27.1 起才算完全铺满。"
           else
             echo "SDK 版本满足要求（$sdk ≥ 27.1），界面可以完全铺满屏幕"
           fi
