@@ -66,15 +66,9 @@ struct ProxyView: View {
                     PanelView(url: url)
                 }
             }
-            .fullScreenCover(isPresented: $showConfigPicker) {
-                ConfigPickerSheet(
-                    configs: oc.configs,
-                    applied: oc.config
-                ) { name in
-                    Task {
-                        await model.switchConfig(name)
-                        await model.refreshOpenClash()
-                    }
+            .sheet(isPresented: $showConfigPicker) {
+                ConfigPickerSheet(configs: oc.configs, applied: oc.config) { name in
+                    Task { await model.switchConfig(name); await model.refreshOpenClash() }
                 }
             }
         }
@@ -672,26 +666,25 @@ private struct ConfigPickerSheet: View {
     }
 
     var body: some View {
-        CenteredModal {
-            ModalCard {
-                VStack(spacing: 0) {
-                    header
-                    Divider()
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(configs, id: \.self) { name in
-                                row(name)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(configs, id: \.self) { name in
+                        row(name)
                     }
-                    .frame(maxHeight: 420)
-                    Divider()
-                    footer
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
             }
+            .frame(maxHeight: 420)
+            Divider()
+            footer
         }
+        .background(SheetSurface())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 
     private var header: some View {

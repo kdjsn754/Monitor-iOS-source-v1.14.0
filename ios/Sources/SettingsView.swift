@@ -56,7 +56,7 @@ struct SettingsView: View {
                 ConnectionEditorView(profile: route.profile)
                     .id(route.id)
             }
-            .fullScreenCover(isPresented: $showSwitcher) {
+            .sheet(isPresented: $showSwitcher) {
                 RouterSwitcherSheet()
                     .environmentObject(model)
             }
@@ -523,33 +523,32 @@ private struct RouterSwitcherSheet: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        CenteredModal {
-            ModalCard {
-                VStack(spacing: 0) {
-                    header
-                    Divider()
+        VStack(spacing: 0) {
+            header
+            Divider()
 
-                    if model.profiles.isEmpty {
-                        Text("还没有保存过连接，先在设置页点「新建连接」。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(16)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 8) {
-                                ForEach(model.profiles) { profile in
-                                    row(profile)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 20)
+            if model.profiles.isEmpty {
+                Text("还没有保存过连接，先在设置页点「新建连接」。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            } else {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(model.profiles) { profile in
+                            row(profile)
                         }
-                        .frame(maxHeight: 420)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 20)
                 }
+                .frame(maxHeight: 420)
             }
         }
+        .background(SheetSurface())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .confirmationDialog(
             pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
             isPresented: $confirmDelete,

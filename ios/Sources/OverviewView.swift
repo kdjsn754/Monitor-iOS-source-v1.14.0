@@ -36,7 +36,7 @@ struct OverviewView: View {
             .refreshable {
                 await model.manualRefresh()
             }
-            .fullScreenCover(isPresented: $showAllDevices) {
+            .sheet(isPresented: $showAllDevices) {
                 DeviceListView()
             }
         }
@@ -603,19 +603,18 @@ private struct RingGauge: View {
 
 /// 会转的风扇叶轮：转速越高转得越快，停转时静止。
 ///
-/// 以前用 `TimelineView(.animation(minimumInterval: 1/20))`：每秒要重绘 20 帧，
-/// 每次重绘都会让 SwiftUI 重新跑一遍 `body`。这个叶轮嵌在概览页的滚动内容里，
-/// 于是缓慢滑动时主线程一直在为它重建视图，结果就是掉帧、卡顿。
-/// 现在改成「一次性下发一条线性无限旋转动画」：旋转只交给合成器（Core Animation）做，
-/// SwiftUI 的 `body` 跑完一次就再也不重跑了，滚动时整页都能稳定 60 帧。
-/// 转速变化时只是把动画周期换一下，从当前角度接着转，不会跳回 0 度。
+/// 以前用 `withAnimation(.linear(duration:).repeatForever())`：转速每次轮询变化，
+/// 这条动画就会被重打一次，于是转着转着忽快忽慢，肉眼能看出「卡一下再加速」。
+/// 而且这条动画是抢滚动帧的：概览页滚的时候它跟内容抢时间片，还会掉帧。
+/// 现在改成 `TimelineView(.periodic(1/20))`——一个普通定时器，只在每个 tick 里
+/// 按「绝对时间」算角度，转速变了只影响下一次角度增量的斜率，不会跳回 0 度，
+/// 也不抢滚动那一帧；`body` 只是跟着日期重算角度，合成器照常合成。
 private struct FanBlades: View {
     let rpm: Double
     let color: Color
     var size: CGFloat = 18
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var angle: Double = 0
 
     /// 每秒转多少圈。3000 RPM 封顶，再快也不加速——屏幕上已经分不出来了。
     private var turnsPerSecond: Double {
@@ -624,25 +623,29 @@ private struct FanBlades: View {
     }
 
     var body: some View {
+        Group {
+            if reduceMotion {
+                blades(angle: 0)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1.0 / 20.0)) { context in
+                    blades(angle: angle(at: context.date))
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func blades(angle: Double) -> some View {
         Image(systemName: "fanblades.fill")
             .font(.system(size: size, weight: .medium))
             .foregroundStyle(color)
             .rotationEffect(.degrees(angle))
-            .onAppear(perform: startSpin)
-            .onChange(of: rpm) { _, _ in startSpin() }
-            .accessibilityHidden(true)
     }
 
-    /// 从当前角度继续转一整圈（360° ≡ 0°，所以循环无缝）。
-    /// 换成线性无限动画后，转得快慢只由这条动画的「一圈用多少秒」决定。
-    private func startSpin() {
-        guard !reduceMotion else {
-            angle = 0
-            return
-        }
-        withAnimation(.linear(duration: 1 / turnsPerSecond).repeatForever(autoreverses: false)) {
-            angle += 360
-        }
+    /// 用绝对时间算角度：角度 = 时间（秒）× 每秒圈数 × 360°。
+    /// 转速变化只改斜率，`context.date` 是连续的，所以换速时不会跳回 0 度。
+    private func angle(at date: Date) -> Double {
+        date.timeIntervalSinceReferenceDate * turnsPerSecond * 360
     }
 }
 

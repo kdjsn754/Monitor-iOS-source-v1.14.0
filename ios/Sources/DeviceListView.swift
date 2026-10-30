@@ -3,12 +3,12 @@ import SwiftUI
 /// 全部在线设备。
 ///
 /// 以前是从概览卡片 NavigationLink 推一个二级页出来，为了看一眼 IP 就得离开首页、
-/// 还得再返回一次。现在改成从屏幕正中的对话框浮起：卡片上点「查看全部」直接居中弹出，
-/// 点右上角叉或点空白处就关掉，概览的滚动位置和实时曲线都不受影响。
+/// 还得再返回一次。现在改成底部 sheet 浮起：卡片上点「查看全部」从底部弹出，
+/// 拖拽条上下拉伸到半屏/全屏，概览的滚动位置和实时曲线都不受影响。
 ///
-/// 版式与「切换连接」「选择配置文件」两个面板完全一致：同一个居中卡片底、
+/// 版式与「切换连接」「选择配置文件」两个面板完全一致：同一套 `SheetSurface` 底色、
 /// 同一种「标题 + 小字 + 圆形叉」的表头、同一种白底圆角行。三个面板走同一套
-/// `CenteredModal` + `ModalCard`，摆在一起就是同一个 App 的东西。
+/// 底部 sheet，摆在一起就是同一个 App 的东西。
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -18,30 +18,29 @@ struct DeviceListView: View {
     @State private var draftName = ""
 
     var body: some View {
-        CenteredModal {
-            ModalCard {
-                VStack(spacing: 0) {
-                    header
-                    Divider()
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            if model.devices.isEmpty {
-                                emptyState
-                            } else {
-                                // 用 IP 做标识：每轮采集都会重建 DeviceInfo，id 每次都不一样，
-                                // 换成 IP 行才不会每 2 秒被整体重建一次。
-                                ForEach(model.devices, id: \.ip) { device in
-                                    row(device)
-                                }
-                            }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(spacing: 8) {
+                    if model.devices.isEmpty {
+                        emptyState
+                    } else {
+                        // 用 IP 做标识：每轮采集都会重建 DeviceInfo，id 每次都不一样，
+                        // 换成 IP 行才不会每 2 秒被整体重建一次。
+                        ForEach(model.devices, id: \.ip) { device in
+                            row(device)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 20)
                     }
-                    .frame(maxHeight: 420)
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
             }
+            .frame(maxHeight: 420)
         }
+        .background(SheetSurface())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .alert("重命名设备", isPresented: $showRename, presenting: renaming) { device in
             TextField("设备名称", text: $draftName)
             Button("保存") {
