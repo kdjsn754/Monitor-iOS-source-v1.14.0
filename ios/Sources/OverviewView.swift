@@ -3,6 +3,8 @@ import SwiftUI
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showAllDevices = false
+    /// 风扇控制面板（点「风扇」那块打开，见 hardwareSection）。
+    @State private var showFanControl = false
 
     var body: some View {
         NavigationStack {
@@ -268,21 +270,32 @@ struct OverviewView: View {
                     color: temperatureTone,
                     badge: temperatureBadge
                 )
-                hardwareTile(
-                    // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
-                    icon: "fanblades",
-                    title: "风扇",
-                    value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
-                    color: fanTone,
-                    badge: fanBadge,
-                    spin: model.stats.fanRPM
-                )
+                // 风扇这张可以点开控制面板（gl-fanctrl）。图标静态，不再跟着转速旋转：
+                // 一块指甲盖大的图标每秒转半圈，除了抢滚动帧、让眼睛一直瞟到它，
+                // 并没有多给出任何信息——转速本来就已经写在旁边了。
+                Button {
+                    showFanControl = true
+                } label: {
+                    hardwareTile(
+                        icon: "fanblades",
+                        title: "风扇",
+                        value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
+                        color: fanTone,
+                        badge: fanBadge,
+                        showsChevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("风扇 \(model.stats.fanRPM.map { String(format: "%.0f 转", $0) } ?? "无传感器")，点按调整")
+                .sheet(isPresented: $showFanControl) {
+                    FanControlView()
+                }
             }
         }
     }
 
-    // 图标跟着读数走：温度计低/中/高三档，风扇叶轮越转越快、颜色由青转橙，
-    // 一眼能看出「凉/热」「慢/快」，不用先读数字。
+    // 温度计图标跟着读数走（低/中/高三档），风扇只换颜色：一眼能看出「凉/热」「静止/高速」，
+    // 不用先读数字。
 
     private var temperatureIcon: String {
         guard let t = model.stats.temperature else { return "thermometer.medium" }
@@ -322,7 +335,7 @@ struct OverviewView: View {
 
     private func hardwareTile(icon: String, title: String, value: String,
                               color: Color, badge: String? = nil,
-                              spin: Double? = nil) -> some View {
+                              showsChevron: Bool = false) -> some View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -330,13 +343,9 @@ struct OverviewView: View {
                     .fill(color.opacity(0.18))
                     .frame(width: 36, height: 36)
 
-                if let rpm = spin, rpm > 0 {
-                    FanBlades(rpm: rpm, color: color, size: 18)
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(color)
-                }
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(color)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -358,6 +367,12 @@ struct OverviewView: View {
             }
 
             Spacer(minLength: 0)
+
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(10)
         .softTile(color, radius: 12)
@@ -598,54 +613,6 @@ private struct RingGauge: View {
             }
         }
         .frame(width: diameter, height: diameter)
-    }
-}
-
-/// 会转的风扇叶轮：转速越高转得越快，停转时静止。
-///
-/// 以前用 `withAnimation(.linear(duration:).repeatForever())`：转速每次轮询变化，
-/// 这条动画就会被重打一次，于是转着转着忽快忽慢，肉眼能看出「卡一下再加速」。
-/// 而且这条动画是抢滚动帧的：概览页滚的时候它跟内容抢时间片，还会掉帧。
-/// 现在改成 `TimelineView(.periodic(1/20))`——一个普通定时器，只在每个 tick 里
-/// 按「绝对时间」算角度，转速变了只影响下一次角度增量的斜率，不会跳回 0 度，
-/// 也不抢滚动那一帧；`body` 只是跟着日期重算角度，合成器照常合成。
-private struct FanBlades: View {
-    let rpm: Double
-    let color: Color
-    var size: CGFloat = 18
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// 每秒转多少圈。3000 RPM 封顶，再快也不加速——屏幕上已经分不出来了。
-    private var turnsPerSecond: Double {
-        let normalized = min(max(rpm, 0), 3000) / 3000
-        return 0.22 + normalized * 0.42
-    }
-
-    var body: some View {
-        Group {
-            if reduceMotion {
-                blades(angle: 0)
-            } else {
-                TimelineView(.periodic(from: .now, by: 1.0 / 20.0)) { context in
-                    blades(angle: angle(at: context.date))
-                }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func blades(angle: Double) -> some View {
-        Image(systemName: "fanblades.fill")
-            .font(.system(size: size, weight: .medium))
-            .foregroundStyle(color)
-            .rotationEffect(.degrees(angle))
-    }
-
-    /// 用绝对时间算角度：角度 = 时间（秒）× 每秒圈数 × 360°。
-    /// 转速变化只改斜率，`context.date` 是连续的，所以换速时不会跳回 0 度。
-    private func angle(at date: Date) -> Double {
-        date.timeIntervalSinceReferenceDate * turnsPerSecond * 360
     }
 }
 

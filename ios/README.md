@@ -2,6 +2,25 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.28.10 — 风扇图标改静态 + 新增风扇控制面板
+
+- **叶轮不转了**：概览页「风扇」那块改成静态图标。之前是跟着转速转的
+  （`TimelineView(.periodic(1/20))` 每秒重绘 20 帧），嵌在滚动列表里仍然会抢帧，
+  而且转速数字就在旁边，转动没有多给信息。颜色仍随转速变（青 → 橙，停转是灰）。
+- **点风扇那块打开控制面板**（新增 `FanControlView.swift`）：接管开关、自动/手动模式、
+  自动温控曲线（起转温度 / 温度墙 / 保护温度 / 回差 / 起转 PWM / 最大 PWM / 轮询间隔）、
+  手动 PWM 滑条、恢复默认。
+- 对接的是 `gl-fanctrl` 插件（https://github.com/XIAOZHAOXSXH/gl-fanctrl ）的
+  `/etc/config/gl_fanctrl`：**只读写这份 UCI 配置再重启它的服务**，不自己算曲线、
+  不直接写 PWM sysfs——否则会和插件的守护进程抢同一个 cooling_device，风扇来回跳。
+- 写配置前按插件校验规则夹一遍范围（温度墙 ≥ 起转 + 5、保护 ≥ 温度墙 + 3 …），
+  因为 `/usr/share/gl-validator.d/fanctrl.lua` 会静默拒绝非法组合。
+- 状态读取一条命令取全：`/proc/gl-hw-info/{temperature,fan}` 优先，退回
+  `/sys/class/thermal/thermal_zone*/temp` 与 `/sys/class/hwmon/hwmon*/fan*_input`；
+  PWM 从 `cooling_device*/cur_state ÷ max_state` 换算，多个 cooling_device 时优先取
+  `type` 里带 fan / pwm 的那个。
+- 版本 1.28.10 / build 51。
+
 ## v1.28.9 — 底栏按系统 App 的样子重做（尺寸 + 图标）
 
 - **尺寸全部按参考 App 的截图量出来**（402pt 宽的机器）：胶囊宽 274、高 62、

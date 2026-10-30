@@ -32,6 +32,12 @@ final class AppModel: ObservableObject {
     /// 自定义设备名：键是 MAC（租约重新下发时 IP 会变，MAC 不会），没 MAC 才退回 IP。
     @Published var deviceAliases: [String: String] = [:]
 
+    /// 风扇控制（gl-fanctrl 插件）。只在打开控制面板时才去问，不跟着轮询跑：
+    /// 一份配置要塞十来次 uci，每 2 秒问一次纯属浪费路由器的 CPU。
+    @Published var fan = FanControlState()
+    /// 正在写风扇配置（面板里按钮转圈、同时避免连点）。
+    @Published var fanBusy = false
+
     @Published var openClash = OpenClashInfo()
     /// OpenClash 的完整状态（装没装、代理模式、配置列表）是否已经成功问过一次。
     ///
@@ -1021,6 +1027,184 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - 风扇控制
+
+    /// 读一次风扇状态：插件配置（UCI）+ 温度 / 转速 / PWM + 两个服务的运行情况。
+    ///
+    /// 一条命令取全，失败也不弹红字：面板上有刷新按钮，重连之后自己会补上。
+    func refreshFan() async {
+        guard connected else { return }
+        do {
+            let sections = parseSections(try await execute(fanStatusCommand))
+            var next = parseFan(sections)
+            // 状态段完全没回来（通道被切断）时不要覆盖上一次的结果，
+            // 否则面板会瞬间变成「未安装插件」。
+            guard next.installed || !(sections["FANCTRL"] ?? "").isEmpty else { return }
+            next.loaded = true
+            fan = next
+        } catch {
+            return
+        }
+    }
+
+    /// 接管开关：0 = 交回官方 gl_fan，1 = 由 gl-fanctrl 守护进程控制。
+    func setFanEnabled(_ on: Bool) async {
+        await fanAction([("enabled", on ? "1" : "0")])
+    }
+
+    func setFanMode(_ mode: FanControlState.Mode) async {
+        await fanAction([("mode", mode.rawValue)])
+    }
+
+    /// 应用整条自动温控曲线。
+    ///
+    /// 值在这里再夹一次：插件的 `/usr/share/gl-validator.d` 会按
+    /// `wall_temp ≥ start_temp + 5`、`critical_temp ≥ wall_temp + 3` 校验，
+    /// 不合法时 uci commit 被拒、风扇会在原地不动，用户只会看到「点了没反应」。
+    func applyFanAuto(startTemp: Int, wallTemp: Int, criticalTemp: Int,
+                      hysteresis: Int, startPercent: Int, maxPercent: Int,
+                      pollInterval: Int) async {
+        let start = min(max(startTemp, 35), 85)
+        let wall = min(max(wallTemp, start + 5), 95)
+        let critical = min(max(criticalTemp, wall + 3), 105)
+        let hyst = min(max(hysteresis, 1), 10)
+        let floor = min(max(startPercent, 0), 100)
+        let ceiling = min(max(maxPercent, floor), 100)
+        let poll = min(max(pollInterval, 1), 30)
+        await fanAction([
+            ("mode", "auto"),
+            ("start_temp", "\(start)"),
+            ("wall_temp", "\(wall)"),
+            ("critical_temp", "\(critical)"),
+            ("hysteresis", "\(hyst)"),
+            ("start_percent", "\(floor)"),
+            ("max_percent", "\(ceiling)"),
+            ("poll_interval", "\(poll)")
+        ])
+    }
+
+    /// 手动调速。`0` 表示停转；`1..100` 会被插件夹在「起转 PWM .. 最大 PWM」之间，
+    /// 所以这里不自己兜底，交给守护进程按它自己的上下限处理。
+    func setFanManual(_ percent: Int) async {
+        await fanAction([
+            ("mode", "manual"),
+            ("manual_percent", "\(min(max(percent, 0), 100))")
+        ])
+    }
+
+    /// 恢复插件默认配置（含 `enabled=0`，也就是把风扇交回官方服务）。
+    func restoreFanDefaults() async {
+        await fanAction([
+            ("enabled", "0"),
+            ("mode", "auto"),
+            ("start_temp", "70"),
+            ("wall_temp", "76"),
+            ("critical_temp", "88"),
+            ("hysteresis", "3"),
+            ("start_percent", "35"),
+            ("max_percent", "100"),
+            ("manual_percent", "0"),
+            ("poll_interval", "2")
+        ])
+    }
+
+    /// 写配置 → commit → 重启插件服务 → 回读一遍。
+    ///
+    /// 重启是必须的：手动模式的 PWM、新的起转温度都要靠守护进程重新读配置才生效，
+    /// 光 commit 的话要等它下一轮轮询（最长 30 秒），用户会以为没生效。
+    private func fanAction(_ assignments: [(String, String)]) async {
+        guard connected else { return }
+        if fanBusy { return }
+        fanBusy = true
+        defer { fanBusy = false }
+        do {
+            let output = try await execute(fanWriteCommand(assignments))
+            guard output.contains("committed") else {
+                presentError("写入风扇配置失败，请确认路由器上已安装 gl-fanctrl 插件")
+                return
+            }
+            // 给守护进程一点时间重新起风、把转速读出来，再回读状态。
+            try? await Task.sleep(for: .milliseconds(900))
+            await refreshFan()
+        } catch {
+            presentError(describe(error))
+        }
+    }
+
+    /// 解析风扇状态命令的输出。
+    private func parseFan(_ sections: [String: String]) -> FanControlState {
+        var state = FanControlState()
+        let dump = sections["FANCTRL"] ?? ""
+        state.installed = dump.split(separator: "\n")
+            .contains { String($0).trimmingCharacters(in: .whitespaces) == "installed" }
+
+        // uci show 每行形如 `gl_fanctrl.<section>.<key>='<value>'`。
+        // 段名可能是 `settings` 也可能是匿名的 `@fanctrl[0]`，所以只认最后一段的键名。
+        for line in dump.split(separator: "\n") {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let key = line[line.startIndex..<eq].split(separator: ".").last.map(String.init) ?? ""
+            let raw = String(line[line.index(after: eq)...])
+            let value = raw.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+            switch key {
+            case "enabled": state.enabled = value == "1" || value == "true"
+            case "mode": state.mode = FanControlState.Mode(rawValue: value) ?? .auto
+            case "start_temp": state.startTemp = Int(Double(value) ?? 70)
+            case "wall_temp": state.wallTemp = Int(Double(value) ?? 76)
+            case "critical_temp": state.criticalTemp = Int(Double(value) ?? 88)
+            case "hysteresis": state.hysteresis = Int(Double(value) ?? 3)
+            case "start_percent": state.startPercent = Int(Double(value) ?? 35)
+            case "max_percent": state.maxPercent = Int(Double(value) ?? 100)
+            case "manual_percent": state.manualPercent = Int(Double(value) ?? 0)
+            case "poll_interval": state.pollInterval = Int(Double(value) ?? 2)
+            default: break
+            }
+        }
+
+        // 温度：/proc/gl-hw-info/temperature 是摄氏度，thermal_zone 是毫摄氏度，
+        // 两者混在同一个段里按行输出，靠「大于 200 就除以 1000」区分。
+        if let value = firstNumber(sections["FANTEMP"]) {
+            state.temperature = value > 200 ? value / 1000 : value
+        }
+        if let value = firstNumber(sections["FANRPM"]) {
+            state.rpm = value
+        }
+
+        // PWM：cooling_device 里可能不止一个（CPU 降频也是 cooling_device），
+        // 优先取 type 里带 fan / pwm 的那个，都没有才退回第一个。
+        var pwm: (current: Int, max: Int)?
+        for line in (sections["FANPWM"] ?? "").split(separator: "\n") {
+            let fields = line.split(separator: " ")
+            guard fields.count >= 3,
+                  let current = Int(fields[1]),
+                  let maxState = Int(fields[2]), maxState > 0 else { continue }
+            let type = String(fields[0]).lowercased()
+            if type.contains("fan") || type.contains("pwm") {
+                pwm = (current, maxState)
+                break
+            }
+            if pwm == nil { pwm = (current, maxState) }
+        }
+        if let pwm {
+            state.pwmPercent = Int((Double(pwm.current) / Double(pwm.max) * 100).rounded())
+        }
+
+        for line in (sections["FANSVC"] ?? "").split(separator: "\n") {
+            if line.hasPrefix("plugin=") { state.pluginRunning = line.hasSuffix("1") }
+        }
+        return state
+    }
+
+    /// 取第一行里的第一个数字（`1234`、`53.4`、`1234 RPM` 都认）。
+    private func firstNumber(_ text: String?) -> Double? {
+        guard let text else { return nil }
+        for line in text.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            let head = trimmed.prefix { $0.isNumber || $0 == "." || $0 == "-" }
+            if let value = Double(head) { return value }
+        }
+        return nil
+    }
+
     // MARK: - Parsing
 
     private func parseOpenClashInfo(_ sections: [String: String],
@@ -1173,7 +1357,7 @@ final class AppModel: ObservableObject {
     private func updateNetwork(_ text: String) {
         guard !stats.wanDevice.isEmpty else { return }
         for line in text.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix(stats.wanDevice + ":") else { continue }
             let numbers = trimmed.split(separator: ":").dropFirst().joined()
                 .split(separator: " ").compactMap { Double($0) }
@@ -1472,6 +1656,65 @@ private extension AppModel {
         echo @@OCDIRS; for d in zashboard metacubexd yacd dashboard; do [ -d "/usr/share/openclash/ui/$d" ] && echo "$d"; done
         true
         """)
+    }
+
+    /// 风扇状态：一次取回插件配置、温度、转速、PWM 和两个服务的运行情况。
+    ///
+    /// 路径顺序照 gl-fanctrl README 的探测顺序来：先 `/proc/gl-hw-info/*`（GL 固件
+    /// 自己维护的，最准），再退到标准 sysfs。整段没有单引号，能安全塞进
+    /// `lowPriority` 的 `sh -c '...'` 里。
+    var fanStatusCommand: String {
+        lowPriority("""
+        echo @@FANCTRL
+        if [ -f /etc/config/gl_fanctrl ]; then echo installed; else echo missing; fi
+        uci -q show gl_fanctrl 2>/dev/null
+        echo @@FANTEMP
+        cat /proc/gl-hw-info/temperature 2>/dev/null
+        for f in /sys/class/thermal/thermal_zone*/temp; do
+          if [ -r "$f" ]; then read -r v < "$f"; echo "$v"; break; fi
+        done
+        echo @@FANRPM
+        cat /proc/gl-hw-info/fan 2>/dev/null
+        for f in /sys/class/hwmon/hwmon*/fan1_input; do
+          if [ -r "$f" ]; then read -r v < "$f"; echo "$v"; break; fi
+        done
+        echo @@FANPWM
+        for d in /sys/class/thermal/cooling_device*; do
+          if [ -r "$d/cur_state" ]; then
+            t=$(cat "$d/type" 2>/dev/null)
+            c=$(cat "$d/cur_state" 2>/dev/null)
+            m=$(cat "$d/max_state" 2>/dev/null)
+            echo "$t $c $m"
+          fi
+        done
+        echo @@FANSVC
+        if ps 2>/dev/null | grep -q "[g]l-fanctrl-daemon"; then echo plugin=1; else echo plugin=0; fi
+        true
+        """)
+    }
+
+    /// 写风扇配置：定位段名 → 逐项 uci set → commit → 重启插件服务。
+    ///
+    /// 段名不能写死：插件的 `/etc/config/gl_fanctrl` 里可能是具名的 `config fanctrl 'settings'`，
+    /// 也可能是匿名的（`uci show` 显示成 `@fanctrl[0]`）。这里从输出里反查，
+    /// 查不到才退回 `@fanctrl[0]`。
+    ///
+    /// 这段**不能**套 `lowPriority`：里面用了 `$S` 变量和 awk 的单引号，
+    /// 被再包一层 `sh -c '…'` 会全部失效。
+    func fanWriteCommand(_ assignments: [(String, String)]) -> String {
+        var lines: [String] = [
+            "S=$(uci -q show gl_fanctrl 2>/dev/null | awk -F. '/[.]enabled=/ {print $2; exit}')",
+            "[ -n \"$S\" ] || S=$(uci -q show gl_fanctrl 2>/dev/null | awk -F. 'NR==1{print $2}')",
+            "[ -n \"$S\" ] || S='@fanctrl[0]'"
+        ]
+        for (key, value) in assignments {
+            lines.append("uci -q set \"gl_fanctrl.$S.\(key)=\(value)\"")
+        }
+        lines.append("uci -q commit gl_fanctrl 2>/dev/null && echo committed")
+        lines.append("/etc/init.d/gl_fanctrl restart >/dev/null 2>&1 || { /etc/init.d/gl_fanctrl stop >/dev/null 2>&1; /etc/init.d/gl_fanctrl start >/dev/null 2>&1; }")
+        lines.append("sleep 1")
+        lines.append("true")
+        return lines.joined(separator: "; ")
     }
 
     /// 每个数据项对应一段脚本。同一档里的项用换行拼成一条命令，交给同一个 shell 跑完，

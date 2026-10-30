@@ -174,6 +174,68 @@ struct HistoryPoint: Identifiable {
     let upload: Double
 }
 
+// MARK: - 风扇控制
+
+/// 路由器上的风扇控制状态，字段与 `gl-fanctrl` 插件的 UCI 配置一一对应。
+///
+/// 参考 https://github.com/XIAOZHAOXSXH/gl-fanctrl —— 它把风扇接管逻辑放在一个 procd
+/// 守护进程里，配置写在 `/etc/config/gl_fanctrl`，界面只是这个配置的另一个入口。
+/// 所以本 App **不自己算曲线、也不直接写 sysfs**：只读写同一份 UCI 配置再重启服务，
+/// 免得和守护进程抢同一个 cooling_device（两边各写一次，风扇会来回跳）。
+struct FanControlState: Equatable {
+    enum Mode: String, CaseIterable, Identifiable {
+        case auto
+        case manual
+
+        var id: String { rawValue }
+        var title: String { self == .auto ? "自动" : "手动" }
+    }
+
+    /// 装了这个插件没有（`/etc/config/gl_fanctrl` 是否存在）。
+    var installed = false
+    /// 有没有成功读过一次。没读过之前不能一口咬定「未安装」——
+    /// 刚打开面板那半秒，`installed` 还是默认的 false。
+    var loaded = false
+
+    // 配置（UCI）
+    var enabled = false
+    var mode: Mode = .auto
+    var startTemp = 70
+    var wallTemp = 76
+    var criticalTemp = 88
+    var hysteresis = 3
+    var startPercent = 35
+    var maxPercent = 100
+    var manualPercent = 0
+    var pollInterval = 2
+
+    // 运行态（sysfs / proc）
+    var temperature: Double?
+    var rpm: Double?
+    /// cooling_device 的 cur_state 按 max_state 换算出来的百分比。
+    var pwmPercent: Int?
+    /// gl-fanctrl 守护进程是否在跑。官方 gl_fan 的进程名在各型号固件里不统一，
+    /// 探不准就不显示——宁可少一格信息，也不要给一个会骗人的绿点。
+    var pluginRunning = false
+
+    /// 自动模式下「按当前温度应该给多少 PWM」，只用于界面上的预期提示。
+    /// 逻辑照抄插件 README 的曲线：低于起转温度减回差 → 0，起转到温度墙之间线性，
+    /// 温度墙及以上满速。
+    var expectedPercent: Int? {
+        guard let t = temperature else { return nil }
+        if t >= Double(wallTemp) { return maxPercent }
+        if t < Double(startTemp - hysteresis) { return 0 }
+        if t >= Double(startTemp) {
+            let span = Double(max(1, wallTemp - startTemp))
+            let ratio = (t - Double(startTemp)) / span
+            let value = Double(startPercent) + ratio * Double(maxPercent - startPercent)
+            return min(max(Int(value.rounded()), startPercent), maxPercent)
+        }
+        // 落在回差带里：还没到起转线、也没凉到该停，维持起转值。
+        return startPercent
+    }
+}
+
 // MARK: - 页面与采集
 
 /// 轮询跟着页面走：只有当前标签页要用的数据才会被采集。
