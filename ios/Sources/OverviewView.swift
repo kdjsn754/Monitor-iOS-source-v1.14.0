@@ -402,7 +402,7 @@ struct OverviewView: View {
         if onlineDeviceCount == 0 {
             return "\(model.devices.count) 台只有租约，此刻都没连上"
         }
-        return "DHCP 租约 · 点开可改名"
+        return "DHCP 租约 · 点开查看"
     }
 
     private var devicesContent: some View {

@@ -12,7 +12,7 @@ import SwiftUI
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    /// 正在改名的设备 + 输入框内容。点一行就进这里。
+    /// 正在改名的设备 + 输入框内容。点行尾的铅笔才进这里。
     @State private var renaming: DeviceInfo?
     @State private var showRename = false
     @State private var draftName = ""
@@ -97,8 +97,8 @@ struct DeviceListView: View {
         let online = model.devices.count - offline
         // 以前这里写的是「N 台在线」，数字其实是租约条数。租约 12 小时才过期，
         // 关掉的设备也算在里面，于是这句标题天天在骗人。现在分开说。
-        if offline == 0 { return "\(online) 台在线 · 点一行可改名" }
-        return "\(online) 台在线 · \(offline) 台离线 · 点一行可改名"
+        if offline == 0 { return "\(online) 台在线 · 点铅笔可改名" }
+        return "\(online) 台在线 · \(offline) 台离线 · 点铅笔可改名"
     }
 
     @ViewBuilder
@@ -118,51 +118,46 @@ struct DeviceListView: View {
 
     /// 卡片里的一行：状态点 + 名字 + IP · MAC / 铅笔（离线行多一个垃圾桶）。
     ///
-    /// 以前整行是一个 Button，右侧只有一个铅笔，想单独删某台离线设备没地方下手。
-    /// 现在文本区和两个图标各自是按钮 —— 点名字改名、点垃圾桶删这台，
-    /// 两个动作互不牵连，也不用做左滑手势（这个面板不是 List，滑不动）。
+    /// **只有右侧图标是按钮**，名字和地址那一块是纯文字、点了什么也不发生。
+    /// 之前把整块文字区包成 Button，本意是「点名字改名」，实际用起来是
+    /// 手指在行里随便一按就弹出改名框 —— 这块面积占了一行的八成，
+    /// 想滚动列表、想看一眼 MAC，都会误触。改名不是高频动作，
+    /// 收到铅笔上更符合直觉，也让滚动时不再有「按下变淡」的干扰。
     private func row(_ device: DeviceInfo) -> some View {
         let name = model.displayName(for: device)
         return HStack(spacing: 10) {
-            Button {
-                beginRename(device, name)
-            } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        // 6pt 的小圆点：绿=此刻真连着，灰=只有租约、人已经走了。
-                        // 不用色块也不用边框，一行里只让这一个点变色。
-                        Circle()
-                            .fill(device.online ? Color.green : Color(.systemGray3))
-                            .frame(width: 6, height: 6)
-                        Text(name)
-                            .font(.subheadline.weight(.medium))
-                            // 离线行整块压一档，扫一眼就能分出在线与离线两组。
-                            .foregroundStyle(device.online
-                                             ? Color(uiColor: .label)
-                                             : Color.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    // IP 和 MAC 拆成两列：IP 给一个固定宽度（13 个等宽字符放得下），
-                    // 后面那个「·」和 MAC 因此每行都从同一个 x 起步。
-                    // 12pt 左缩进是为了跟上一行的名字左边缘对齐——圆点单独悬在左边，
-                    // 名字和 IP 都从同一条线开始，四行扫下来不会一边多一块一边少一块。
-                    HStack(spacing: 6) {
-                        Text(device.ip)
-                            .frame(minWidth: 88, alignment: .leading)
-                        Text("·")
-                        Text(device.mac.uppercased())
-                    }
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.leading, 12)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    // 6pt 的小圆点：绿=此刻真连着，灰=只有租约、人已经走了。
+                    // 不用色块也不用边框，一行里只让这一个点变色。
+                    Circle()
+                        .fill(device.online ? Color.green : Color(.systemGray3))
+                        .frame(width: 6, height: 6)
+                    Text(name)
+                        .font(.subheadline.weight(.medium))
+                        // 离线行整块压一档，扫一眼就能分出在线与离线两组。
+                        .foregroundStyle(device.online
+                                         ? Color(uiColor: .label)
+                                         : Color.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                // IP 和 MAC 拆成两列：IP 给一个固定宽度（13 个等宽字符放得下），
+                // 后面那个「·」和 MAC 因此每行都从同一个 x 起步。
+                // 12pt 左缩进是为了跟上一行的名字左边缘对齐——圆点单独悬在左边，
+                // 名字和 IP 都从同一条线开始，四行扫下来不会一边多一块一边少一块。
+                HStack(spacing: 6) {
+                    Text(device.ip)
+                        .frame(minWidth: 88, alignment: .leading)
+                    Text("·")
+                    Text(device.mac.uppercased())
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 12)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(name)，\(device.ip)，点按重命名")
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if !device.online {
                 Button {
@@ -185,7 +180,9 @@ struct DeviceListView: View {
             } label: {
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    // 铅笔现在是唯一的改名入口，不能再用 tertiary（太淡，看不出能点），
+                    // 降一档到 secondary，和旁边垃圾桶同一个视觉重量。
+                    .foregroundStyle(.secondary)
                     .frame(width: 26, height: 26)
                     .background(Color(.tertiarySystemFill), in: Circle())
                     .contentShape(Circle())
