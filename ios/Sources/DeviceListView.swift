@@ -19,24 +19,32 @@ struct DeviceListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            SheetHeader("连接设备", caption: headerCaption) {
+                SheetCloseButton { dismiss() }
+            }
+
             ScrollView {
-                VStack(spacing: 8) {
+                VStack(spacing: 0) {
                     if model.devices.isEmpty {
                         emptyState
                     } else {
                         // 用 IP 做标识：每轮采集都会重建 DeviceInfo，id 每次都不一样，
                         // 换成 IP 行才不会每 2 秒被整体重建一次。
-                        ForEach(model.devices, id: \.ip) { device in
-                            row(device)
+                        SheetListCard {
+                            ForEach(Array(model.devices.enumerated()), id: \.element.ip) { index, device in
+                                if index > 0 {
+                                    SheetRowDivider(leading: 14)
+                                }
+                                row(device)
+                            }
                         }
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 20)
+                .padding(.top, 14)
+                .padding(.bottom, 24)
             }
-            .frame(maxHeight: 420)
+            .scrollBounceBehavior(.basedOnSize)
         }
         .background(SheetSurface())
         .presentationDetents([.medium, .large])
@@ -55,36 +63,6 @@ struct DeviceListView: View {
         }
     }
 
-    /// 和另外两个面板同一个表头：左边两行字、右边一枚圆形叉。
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("连接设备")
-                    .font(.headline)
-                Text(headerCaption)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 6)
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .softTile(.blue, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭")
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
-    }
-
     private var headerCaption: String {
         guard !model.devices.isEmpty else { return "DHCP 租约里还没有设备" }
         return "\(model.devices.count) 台在线 · 点一行可改名"
@@ -101,13 +79,15 @@ struct DeviceListView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 34)
-        .rowTile(radius: 14)
+        .background(
+            Color(.secondarySystemBackground),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
     }
 
-    /// 一行一块白底 + 细边，和配置选择器里的行同一套：名字 + IP·MAC / 铅笔。
-    /// 以前每行最左边还有一枚蓝底圆形字母头像，和右边那枚铅笔按钮一左一右，
-    /// 整行被「两个圆」夹住，名字反而成了配角。去掉左边头像后，名字靠左对齐、
-    /// 铅笔靠右，一眼先看到设备是谁。
+    /// 卡片里的一行：名字 + IP · MAC / 铅笔。
+    /// 以前每行单独一圈边框、左边还有一枚蓝底字母头像，和右边的铅笔一左一右，
+    /// 名字被两个圆夹在中间成了配角。现在行合进一张卡，只留右侧铅笔。
     private func row(_ device: DeviceInfo) -> some View {
         let name = model.displayName(for: device)
         return Button {
@@ -124,8 +104,6 @@ struct DeviceListView: View {
                         .truncationMode(.tail)
                     // IP 和 MAC 拆成两列：IP 给一个固定宽度（13 个等宽字符放得下），
                     // 后面那个「·」和 MAC 因此每行都从同一个 x 起步。
-                    // 原来是一整串「IP · MAC」，IP 少一位整行就往左缩一格，
-                    // 四行下来中间那个点参差不齐，看着就像没对齐。
                     HStack(spacing: 6) {
                         Text(device.ip)
                             .frame(minWidth: 88, alignment: .leading)
@@ -142,14 +120,13 @@ struct DeviceListView: View {
 
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(.tertiary)
                     .frame(width: 26, height: 26)
-                    .softTile(.blue, in: Circle())
+                    .background(Color(.tertiarySystemFill), in: Circle())
             }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            .rowTile(radius: 13)
-            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(name)，\(device.ip)，点按重命名")

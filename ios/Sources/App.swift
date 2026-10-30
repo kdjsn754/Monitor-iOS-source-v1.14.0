@@ -339,96 +339,36 @@ struct LoginView: View {
     @State private var port = "22"
     @State private var user = "root"
     @State private var password = ""
+    @State private var revealPassword = false
     @State private var didAutoConnect = false
+    @FocusState private var focused: Field?
+
+    private enum Field: Hashable { case host, port, user, password }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 12) {
-                    // 和桌面图标同一枚线稿（见 RouterGlyph），不再用 SF Symbols 的路由器。
-                    RouterGlyph(size: 34)
-                        .frame(width: 54, height: 54)
-                        .softTile(.blue, in: Circle())
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("OpenWrt 监控")
-                            .font(.title2.bold())
-                        Text("SSH 直连 · 数据仅在本机处理")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.top, 4)
+            VStack(spacing: 18) {
+                header
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("路由器地址").font(.caption).foregroundStyle(.secondary)
-                    TextField("192.168.1.1", text: $host)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("SSH 端口").font(.caption).foregroundStyle(.secondary)
-                        TextField("22", text: $port)
-                            .keyboardType(.numberPad)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("用户名").font(.caption).foregroundStyle(.secondary)
-                        TextField("root", text: $user)
-                            .textInputAutocapitalization(.never)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("密码").font(.caption).foregroundStyle(.secondary)
-                    SecureField("路由器 root 密码", text: $password)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                Toggle("自动登录", isOn: Binding(
-                    get: { model.autoLogin },
-                    set: { model.autoLogin = $0 }
-                ))
-
-                Button {
-                    LocalNetworkPermission.shared.request()
-                    Task {
-                        await model.connect(
-                            host: host,
-                            port: Int(port) ?? 22,
-                            user: user,
-                            password: password
-                        )
-                    }
-                } label: {
-                    HStack {
-                        if model.connecting { ProgressView().tint(.white) }
-                        Text(model.connecting ? "正在连接…" : "连接路由器")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                }
-                .buttonStyle(GlassProminentButtonStyle())
-                .disabled(model.connecting)
-                .opacity(model.connecting ? 0.6 : 1)
+                credentialsCard
+                connectButton
 
                 if let error = model.errorMessage {
                     ErrorBanner(text: error) { model.clearError() }
                 }
 
-                Text("请确认路由器已启用 SSH，并允许局域网访问。")
+                Text("请确认路由器已启用 SSH，并允许局域网访问")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 28)
-            .glassCard(padding: 20, cornerRadius: 28)
+            .padding(.horizontal, 20)
+            .padding(.top, 46)
+            .padding(.bottom, 40)
         }
-        .background(Color.clear)
+        .scrollDismissesKeyboard(.interactively)
+        .scrollBounceBehavior(.basedOnSize)
         .task {
             guard !didAutoConnect else { return }
             didAutoConnect = true
@@ -442,6 +382,183 @@ struct LoginView: View {
                 ) ?? ""
             }
             await model.autoConnectIfPossible()
+        }
+    }
+
+    // MARK: - 头部
+
+    /// 图标 + 名字居中，像「登录一个服务」而不是「填一张表单」。
+    private var header: some View {
+        VStack(spacing: 14) {
+            RouterGlyph(size: 42)
+                .frame(width: 86, height: 86)
+                .softTile(.blue, in: Circle())
+
+            VStack(spacing: 5) {
+                Text("OpenWrt 监控")
+                    .font(.system(size: 26, weight: .bold))
+                    .tracking(-0.3)
+                Text("SSH 直连 · 数据仅在本机处理")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - 表单
+
+    /// 一整张卡片装下全部输入项，行与行之间用缩进分隔线。
+    ///
+    /// 原来每个输入框头顶都挂一行「路由器地址 / SSH 端口」的小标题，
+    /// 五个控件五个标题，纵向被切成五段，视线每填一格就要重新落一次。
+    /// 改成「左边标签、右边输入」的一行一项后，标签列是齐的，眼睛只往下扫。
+    private var credentialsCard: some View {
+        VStack(spacing: 0) {
+            inputRow("路由器地址") {
+                TextField("192.168.1.1", text: $host)
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                    .focused($focused, equals: .host)
+                    .onSubmit { focused = .port }
+            }
+            formDivider
+
+            inputRow("SSH 端口") {
+                TextField("22", text: $port)
+                    .keyboardType(.numberPad)
+                    .submitLabel(.next)
+                    .focused($focused, equals: .port)
+                    .onSubmit { focused = .user }
+            }
+            formDivider
+
+            inputRow("用户名") {
+                TextField("root", text: $user)
+                    .textContentType(.username)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                    .focused($focused, equals: .user)
+                    .onSubmit { focused = .password }
+            }
+            formDivider
+
+            inputRow("密码") {
+                HStack(spacing: 10) {
+                    Group {
+                        if revealPassword {
+                            TextField("路由器 root 密码", text: $password)
+                        } else {
+                            SecureField("路由器 root 密码", text: $password)
+                        }
+                    }
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .focused($focused, equals: .password)
+                    .onSubmit { connect() }
+
+                    Button {
+                        revealPassword.toggle()
+                    } label: {
+                        Image(systemName: revealPassword ? "eye.slash" : "eye")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(revealPassword ? "隐藏密码" : "显示密码")
+                }
+            }
+            formDivider
+
+            HStack(spacing: 12) {
+                Text("自动登录")
+                    .font(.subheadline)
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(
+                    get: { model.autoLogin },
+                    set: { model.autoLogin = $0 }
+                ))
+                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 52)
+        }
+        .background(
+            Color(.secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5)
+        }
+    }
+
+    /// 一行：左边是固定宽度的标签，右边是右对齐的输入。
+    private func inputRow<Content: View>(_ title: String,
+                                         @ViewBuilder field: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize()
+            field()
+                .font(.subheadline)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 52)
+    }
+
+    /// 卡片里的分隔线：从标签列开始，不顶到卡片左右边。
+    private var formDivider: some View {
+        Rectangle()
+            .fill(Color(.separator).opacity(0.55))
+            .frame(height: 0.5)
+            .padding(.leading, 16)
+    }
+
+    // MARK: - 动作
+
+    private var connectButton: some View {
+        Button(action: connect) {
+            HStack(spacing: 8) {
+                if model.connecting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                }
+                Text(model.connecting ? "正在连接…" : "连接路由器")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+        }
+        .buttonStyle(GlassProminentButtonStyle())
+        .disabled(model.connecting)
+        .opacity(model.connecting ? 0.65 : 1)
+        .padding(.top, 4)
+    }
+
+    private func connect() {
+        focused = nil
+        LocalNetworkPermission.shared.request()
+        Task {
+            await model.connect(
+                host: host,
+                port: Int(port) ?? 22,
+                user: user,
+                password: password
+            )
         }
     }
 }

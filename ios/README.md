@@ -2,6 +2,18 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.28.12 — 登录页 / 切换连接面板重做，深色与弹窗顶边修复
+
+- **登录页**：改成「居中图标 + 一张分组卡片」的样子。四个输入项从「小标题 + 方框」
+  换成「左标签、右输入」的行，行间缩进细线；密码加显示/隐藏眼睛；键盘 Next 串起来。
+- **切换连接面板**：行合进一张分组列表（不再每行一张蓝边卡），面板高度按条数算
+  （`presentationDetents(.height)`），只有一条记录时不再空出半屏；关闭叉改成系统灰圆圈。
+- **深色模式行块发黑**：`rowTile` 深色改用 `tertiarySystemBackground`（原来取
+  `systemBackground` = 纯黑，压在深灰卡上像挖洞）；「查看全部」改用 `systemBlue`。
+- **弹窗首行贴线**：新增 `SheetHeader` / `SheetCloseButton` / `SheetIconButton` /
+  `SheetListCard` / `SheetRowDivider`，三个面板统一表头与 14pt 顶部留白。
+- 版本 1.28.12 / build 53。
+
 ## v1.28.11 — 底栏选中图标改纯黑，盾牌重画
 
 - **选中图标不再是灰的**：之前切页后选中那枚图标发灰（约 #AFAFB1），和旁边纯黑的

@@ -85,22 +85,31 @@ extension View {
     }
 }
 
-/// 面板 / 卡片里的「行」：白底 + 一圈细边。
+/// 面板 / 卡片里的「行」：和卡片同色 + 一圈细边。
 ///
 /// 这些行以前用 `softTile(.blue)`：5% 蓝底 + 15% 蓝边。一行两行还像块面，
 /// 一屏四五行叠起来整片发蓝，跟卡片的白底互相打架，行里的 IP / MAC 也被衬得发蓝，
 /// 看着像「一排提示卡」而不是普通列表。
 /// 现在统一回到白底黑字：填充就是 `systemBackground`（和卡片同色），
-/// 只留一圈 `separator` 细边划出行界；深色模式跟着系统走，不用另配一套色。
+/// 只留一圈 `separator` 细边划出行界。
+///
+/// 深色模式不能再跟浅色一样取 `systemBackground`——那是**纯黑**（#000），
+/// 而外层卡片是 `secondarySystemGroupedBackground`（#1C1C1E），黑行压在深灰卡上
+/// 会像挖了一个洞，行与卡片的边界比文字还抢眼。深色用 `tertiarySystemBackground`
+/// （#2C2C2E）比卡片亮一档，层级才对。
 /// `emphasized` 只给「当前选中的那一行」用：不铺蓝底，只把边线换成主色。
 struct RowTileModifier<S: InsettableShape>: ViewModifier {
     let shape: S
     var emphasized: Bool = false
 
+    @Environment(\.colorScheme) private var colorScheme
+
     func body(content: Content) -> some View {
         content
             .background {
-                shape.fill(Color(.systemBackground))
+                shape.fill(colorScheme == .dark
+                           ? Color(.tertiarySystemBackground)
+                           : Color(.systemBackground))
             }
             .overlay {
                 shape.strokeBorder(
@@ -264,8 +273,7 @@ struct GlassProminentButtonStyle: ButtonStyle {
     }
 }
 
-/// 居中的对话框容器：一层半透明遮罩把背后的页面压暗，中间放一张圆角卡片。
-///
+/// 居中的对话框容器：一层半透明遮罩把背后的页面压暗，中间放一张圆角卡片。///
 /// 以前「连接设备 / 选择配置文件 / 切换连接」都是底部浮层（`.sheet` + 拖拽条），
 /// 在 iPhone 上只能从底边长出来、还常把最后一行内容压在下面。改成这种居中弹窗后，
 /// 内容是浮在页面正中的卡片，四周留白一致，文字和对齐也好排；点遮罩任意处即可关闭。
@@ -304,5 +312,116 @@ struct ModalCard<Content: View>: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: .black.opacity(0.16), radius: 30, y: 14)
+    }
+}
+
+// MARK: - 底部面板的公共骨架
+
+/// 底部面板的统一表头：左边「标题 + 一行小字」，右边一个圆形按钮。
+///
+/// 之前三个面板各自复制了一份一模一样的表头代码，改一处要同步三处，
+/// 而且右侧的关闭叉是三份淡蓝小圆圈——系统面板里那是灰的，蓝色圆圈在
+/// 白底上像一枚「操作按钮」，点下去之前看不出它只是关闭。
+struct SheetHeader<Trailing: View>: View {
+    private let title: String
+    private let caption: String
+    private let trailing: Trailing
+
+    init(_ title: String, caption: String, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.caption = caption
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 6)
+            trailing
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+    }
+}
+
+extension SheetHeader where Trailing == EmptyView {
+    init(_ title: String, caption: String) {
+        self.init(title, caption: caption) { EmptyView() }
+    }
+}
+
+/// 表头右上角那枚关闭叉：灰底圆，和系统面板一致。
+struct SheetCloseButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Color(.tertiarySystemFill), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("关闭")
+    }
+}
+
+/// 表头右上角的小图标按钮（刷新之类），跟关闭叉同一套尺寸。
+struct SheetIconButton: View {
+    let systemImage: String
+    let label: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Color(.tertiarySystemFill), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// 面板里的「一块列表」：多行合进一张卡片，行间用缩进细线隔开。
+///
+/// 以前每行都是独立的圆角块 + 一圈边框，三行下来像三张便利贴并排；
+/// 合起来之后才像系统里的分组列表。
+struct SheetListCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) { content() }
+            .background(
+                Color(.secondarySystemBackground),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// 列表卡片里的分隔线：从文字起始处开始，不顶到卡片边缘。
+struct SheetRowDivider: View {
+    var leading: CGFloat = 58
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(.separator).opacity(0.6))
+            .frame(height: 0.5)
+            .padding(.leading, leading)
     }
 }

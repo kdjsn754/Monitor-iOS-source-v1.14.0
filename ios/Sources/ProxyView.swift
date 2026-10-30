@@ -667,54 +667,30 @@ private struct ConfigPickerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            SheetHeader("选择配置文件",
+                        caption: "共 \(configs.count) 个，当前用 \(appliedName)") {
+                SheetCloseButton { dismiss() }
+            }
             ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(configs, id: \.self) { name in
+                SheetListCard {
+                    ForEach(Array(configs.enumerated()), id: \.element) { index, name in
+                        if index > 0 {
+                            SheetRowDivider(leading: 14)
+                        }
                         row(name)
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.top, 14)
+                .padding(.bottom, 14)
             }
             .frame(maxHeight: 420)
-            Divider()
+            .scrollBounceBehavior(.basedOnSize)
             footer
         }
         .background(SheetSurface())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-    }
-
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("选择配置文件")
-                    .font(.headline)
-                Text("共 \(configs.count) 个，当前用 \(appliedName)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 6)
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .softTile(.blue, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭")
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
     }
 
     private func row(_ name: String) -> some View {
@@ -756,13 +732,14 @@ private struct ConfigPickerSheet: View {
                         .foregroundStyle(Color.blue)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 12)
             // minHeight 兜底：名字长短、有没有标签，都不影响行高
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            // 选中只靠那一圈蓝边和左侧的圆点，不再铺一层浅蓝底
-            .rowTile(radius: 13, emphasized: selected)
-            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            // 行现在合在一张卡里，选中靠左侧那圈蓝点 + 一层淡蓝底表示，
+            // 不再给每行套一圈边框（三行三个框，像三张便利贴）。
+            .background(selected ? Color.blue.opacity(0.06) : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

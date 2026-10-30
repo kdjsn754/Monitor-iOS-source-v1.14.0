@@ -22,7 +22,6 @@ struct FanControlView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             ScrollView {
                 VStack(spacing: 12) {
                     if !model.fan.loaded {
@@ -69,46 +68,16 @@ struct FanControlView: View {
     // MARK: - 表头
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("风扇控制")
-                    .font(.headline)
-                Text(headerCaption)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        SheetHeader("风扇控制", caption: headerCaption) {
+            HStack(spacing: 8) {
+                SheetIconButton(systemImage: "arrow.clockwise",
+                                label: "刷新风扇状态") {
+                    Task { await model.refreshFan() }
+                }
+                .disabled(model.fanBusy)
+                SheetCloseButton { dismiss() }
             }
-            Spacer(minLength: 6)
-            Button {
-                Task { await model.refreshFan() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .softTile(.blue, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.fanBusy)
-            .accessibilityLabel("刷新风扇状态")
-
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .softTile(.blue, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
     }
 
     private var headerCaption: String {

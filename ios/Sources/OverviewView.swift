@@ -416,7 +416,9 @@ struct OverviewView: View {
                             .font(.system(size: 9, weight: .semibold))
                     }
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.blue)
+                    // 用会自己适配深浅的 systemBlue：写死 .blue（#007AFF）
+                    // 压在深色卡片上偏暗，几乎和背景糊在一起。
+                    .foregroundStyle(Color(.systemBlue))
                 }
             }
             .padding(.horizontal, 12)

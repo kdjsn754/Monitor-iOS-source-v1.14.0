@@ -513,9 +513,12 @@ struct SectionCard<Content: View>: View {
 
 // MARK: - 切换连接
 
-/// 原来的「已保存连接」卡片整块搬到这里：点一行就切换，右侧垃圾桶删掉。
-/// 设置页本身只留三个动作按钮，不再被一条连接列表撑长；
-/// 面板是和配置选择器同一套自绘样式，不用系统的列表/菜单。
+/// 已保存的连接列表：点一行就切换，右侧垃圾桶删掉。
+///
+/// 原来是「每行一块圆角卡 + 蓝边」竖着排，一屏三行像贴了三张便利贴，
+/// 而面板固定半屏高，只有一条记录时下半屏全是空白——所以看着又碎又空。
+/// 现在改成系统设置那种分组列表（行合进一张卡、行间缩进细线），
+/// 高度按条数算（`presentationDetents` 用 `.height`），有几条就多高。
 private struct RouterSwitcherSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -524,30 +527,39 @@ private struct RouterSwitcherSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            SheetHeader("切换连接", caption: caption) {
+                SheetCloseButton { dismiss() }
+            }
 
-            if model.profiles.isEmpty {
-                Text("还没有保存过连接，先在设置页点「新建连接」。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(model.profiles) { profile in
-                            row(profile)
+            ScrollView {
+                VStack(spacing: 16) {
+                    if model.profiles.isEmpty {
+                        emptyCard
+                    } else {
+                        SheetListCard {
+                            ForEach(Array(model.profiles.enumerated()), id: \.element.id) { index, profile in
+                                if index > 0 {
+                                    SheetRowDivider(leading: 58)
+                                }
+                                row(profile)
+                            }
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
+
+                    Text("点一行立即切换；删除会一并清掉钥匙串里的密码。")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
                 }
-                .frame(maxHeight: 420)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 24)
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
         .background(SheetSurface())
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.height(sheetHeight), .large])
         .presentationDragIndicator(.visible)
         .confirmationDialog(
             pendingDelete.map { "删除「\($0.title)」？" } ?? "删除这个连接？",
@@ -567,33 +579,40 @@ private struct RouterSwitcherSheet: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("切换连接")
-                    .font(.headline)
-                Text("共 \(model.profiles.count) 个，点一下即切换")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 6)
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .softTile(.blue, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭")
+    private var caption: String {
+        model.profiles.isEmpty
+            ? "还没有保存过连接"
+            : "共 \(model.profiles.count) 个，点一下即切换"
+    }
+
+    /// 面板高度跟着条数走：表头 70 + 每行 64 + 说明 36 + 上下留白 38。
+    /// 只有一条记录时不再撑出半屏空白；八条以上就顶到 560 由 ScrollView 接管。
+    /// 空状态那张卡比一行高得多（有图标和两行说明），单独给 300。
+    private var sheetHeight: CGFloat {
+        guard !model.profiles.isEmpty else { return 300 }
+        let rows = CGFloat(model.profiles.count)
+        return min(max(70 + rows * 64 + 36 + 38, 216), 560)
+    }
+
+    private var emptyCard: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "router")
+                .font(.system(size: 22))
+                .foregroundStyle(.tertiary)
+            Text("还没有保存过连接")
+                .font(.subheadline.weight(.medium))
+            Text("回到设置页点「新建连接」，填好路由器地址和密码即可")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
         .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .background(
+            Color(.secondarySystemBackground),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
     }
 
     private func row(_ profile: RouterProfile) -> some View {
@@ -601,22 +620,21 @@ private struct RouterSwitcherSheet: View {
         let isConnecting = model.connecting
             && model.attemptTarget?.profile.id == profile.id
 
-        return HStack(spacing: 8) {
+        return HStack(spacing: 0) {
             Button {
                 guard !isCurrent, !isConnecting else { return }
                 // 先收起面板，让连接弹窗能盖在最上面。
                 dismiss()
                 Task { await model.switchTo(profile) }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(isCurrent ? Color.blue.opacity(0.14) : Color.blue.opacity(0.05))
-                            .frame(width: 36, height: 36)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(isCurrent ? Color.blue.opacity(0.16) : Color(.tertiarySystemFill))
+                            .frame(width: 34, height: 34)
                         // 原来靠「实心 / 空心」区分当前连接，线稿没有实心版，
                         // 改用颜色：当前那台给主色，其余降到次要灰。
-                        // 24pt：墨迹占满宽度、只有 17 高，19pt 时看着比旁边的标题还小。
-                        RouterGlyph(size: 24,
+                        RouterGlyph(size: 22,
                                     tint: isCurrent ? Color.blue : Color.secondary)
                     }
 
@@ -629,28 +647,33 @@ private struct RouterSwitcherSheet: View {
                             if isCurrent {
                                 Text("当前")
                                     .font(.system(size: 9, weight: .semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.green.opacity(0.14), in: Capsule())
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Color.green.opacity(0.16), in: Capsule())
                                     .foregroundStyle(.green)
                             }
                         }
                         Text(profile.subtitle)
-                            .font(.caption2)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .truncationMode(.middle)
                     }
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 6)
 
                     if isConnecting {
                         ProgressView().controlSize(.mini)
                     } else if !isCurrent {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.tertiary)
                     }
                 }
+                .padding(.leading, 14)
+                .padding(.trailing, 8)
+                .frame(minHeight: 64)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -662,19 +685,15 @@ private struct RouterSwitcherSheet: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.red.opacity(0.9))
-                    .frame(width: 32, height: 32)
-                    .background(Color.red.opacity(0.09), in: Circle())
-                    .contentShape(Circle())
+                    .foregroundStyle(.red.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.trailing, 12)
             .accessibilityLabel("删除 \(profile.title)")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        // 当前连接只靠一圈蓝边标出来，不再铺浅蓝底
-        .rowTile(radius: 13, emphasized: isCurrent)
+        .background(isCurrent ? Color.blue.opacity(0.05) : Color.clear)
     }
 }
 
