@@ -51,10 +51,19 @@ struct FanControlView: View {
         .task {
             await model.refreshFan()
             seed()
+            // 面板开着就每 2 秒刷一次**运行态**（温度 / 转速 / PWM / 守护进程）。
+            // 以前只在打开那一刻读一次，之后不管风扇怎么转，界面都停在那张快照上。
+            // 只刷运行态、不重读配置：`uci show` 又慢又没必要，而且整份 `fan`
+            // 被覆盖会把正在拖的曲线草稿顶回旧值。
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                if Task.isCancelled { break }
+                await model.refreshFanRuntime()
+            }
         }
-        // 每次动作之后 model 会回读一遍状态，这里跟着把草稿对齐，
-        // 免得「应用完还显示旧值」。
-        .onChange(of: model.fan) { _, _ in seed() }
+        // 草稿只在**配置**变化时对齐：运行态每 2 秒都在变，拿它当触发条件的话，
+        // 用户正拖着 Stepper 的时候草稿会被反复重置。
+        .onChange(of: FanDraft(model.fan)) { _, _ in seed() }
         .confirmationDialog("恢复插件的默认配置？", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("恢复默认", role: .destructive) {
                 Task { await model.restoreFanDefaults() }
@@ -90,7 +99,7 @@ struct FanControlView: View {
     // MARK: - 状态
 
     private var statusCard: some View {
-        SectionCard("当前状态", icon: "fanblades") {
+        SheetSectionCard("当前状态", icon: "fanblades") {
             VStack(spacing: 12) {
                 HStack(spacing: 8) {
                     statTile("温度", value: model.fan.temperature.map { String(format: "%.0f°", $0) } ?? "—", color: .teal)
@@ -115,6 +124,17 @@ struct FanControlView: View {
                         }
                     }
                 }
+
+                // 面板开着的时候这两个数字每 2 秒自己刷一次，说明一句，
+                // 免得用户以为是「进来那一刻的死值」。
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("温度与转速每 2 秒自动刷新")
+                        .font(.system(size: 10))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.tertiary)
             }
         }
     }
@@ -145,7 +165,7 @@ struct FanControlView: View {
     // MARK: - 接管
 
     private var takeoverCard: some View {
-        SectionCard("接管", icon: "hand.raised") {
+        SheetSectionCard("接管", icon: "hand.raised") {
             VStack(spacing: 10) {
                 Toggle(isOn: Binding(
                     get: { model.fan.enabled },
@@ -206,7 +226,7 @@ struct FanControlView: View {
     // MARK: - 模式
 
     private var modeCard: some View {
-        SectionCard("控制模式", icon: "slider.horizontal.3") {
+        SheetSectionCard("控制模式", icon: "slider.horizontal.3") {
             Picker("控制模式", selection: Binding(
                 get: { model.fan.mode },
                 set: { value in Task { await model.setFanMode(value) } }
@@ -223,7 +243,7 @@ struct FanControlView: View {
     // MARK: - 自动曲线
 
     private var curveCard: some View {
-        SectionCard("自动温控曲线", icon: "thermometer.medium") {
+        SheetSectionCard("自动温控曲线", icon: "thermometer.medium") {
             VStack(spacing: 11) {
                 paramRow("起转温度", value: $draft.startTemp, range: 35...85, unit: "°C")
                 paramRow("温度墙", value: $draft.wallTemp, range: 35...95, unit: "°C",
@@ -307,7 +327,7 @@ struct FanControlView: View {
     // MARK: - 手动
 
     private var manualCard: some View {
-        SectionCard("手动转速", icon: "dial.medium") {
+        SheetSectionCard("手动转速", icon: "dial.medium") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("\(Int(manualValue.rounded()))")
@@ -409,8 +429,12 @@ struct FanControlView: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground),
+            .background(Color(.systemBackground),
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+            }
     }
 
     /// 面板里的数字跟着路由器回读的值走。用户没按「应用」之前，改动只存在草稿里。

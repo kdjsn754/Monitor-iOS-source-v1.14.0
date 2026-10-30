@@ -1047,6 +1047,38 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// 只读运行态的一次刷新：温度 / 转速 / PWM / 守护进程，**不读 UCI 配置**。
+    ///
+    /// 面板开着的时候每 2 秒跑这条。之前面板只在打开那一刻读一次，之后温度、转速、
+    /// PWM 全是开机那张快照——风扇明明已经从 32% 爬到 60%，界面还显示 32%。
+    /// 也不能直接复用 `refreshFan()`：`uci show` 要 fork 好几次、回来十几行配置，
+    /// 而这些配置在用户按「应用」之前不会变；更要紧的是整份 `fan` 被覆盖会触发
+    /// 面板的 `onChange` 把正在拖的曲线草稿顶回旧值。
+    func refreshFanRuntime() async {
+        guard connected, !fanBusy else { return }
+        do {
+            let sections = parseSections(try await execute(fanRuntimeCommand))
+            // 三个段一个都没回来（通道忙、脚本被截断）就别动，
+            // 否则界面会瞬间从「65°」跳成「—」。
+            guard sections["FANTEMP"] != nil || sections["FANRPM"] != nil
+                    || sections["FANPWM"] != nil else { return }
+            if let value = firstNumber(sections["FANTEMP"]) {
+                fan.temperature = value > 200 ? value / 1000 : value
+            }
+            if let value = firstNumber(sections["FANRPM"]) {
+                fan.rpm = value
+            }
+            if let pwm = parseFanPWM(sections["FANPWM"] ?? "") {
+                fan.pwmPercent = pwm
+            }
+            for line in (sections["FANSVC"] ?? "").split(separator: "\n") {
+                if line.hasPrefix("plugin=") { fan.pluginRunning = line.hasSuffix("1") }
+            }
+        } catch {
+            return
+        }
+    }
+
     /// 接管开关：0 = 交回官方 gl_fan，1 = 由 gl-fanctrl 守护进程控制。
     func setFanEnabled(_ on: Bool) async {
         await fanAction([("enabled", on ? "1" : "0")])
@@ -1171,8 +1203,21 @@ final class AppModel: ObservableObject {
 
         // PWM：cooling_device 里可能不止一个（CPU 降频也是 cooling_device），
         // 优先取 type 里带 fan / pwm 的那个，都没有才退回第一个。
+        if let pwm = parseFanPWM(sections["FANPWM"] ?? "") {
+            state.pwmPercent = pwm
+        }
+
+        for line in (sections["FANSVC"] ?? "").split(separator: "\n") {
+            if line.hasPrefix("plugin=") { state.pluginRunning = line.hasSuffix("1") }
+        }
+        return state
+    }
+
+    /// `type cur_state max_state` 一行一台 cooling_device，换算成百分比。
+    /// 全量读和只读运行态两条路径共用，免得两处口径慢慢走偏。
+    private func parseFanPWM(_ text: String) -> Int? {
         var pwm: (current: Int, max: Int)?
-        for line in (sections["FANPWM"] ?? "").split(separator: "\n") {
+        for line in text.split(separator: "\n") {
             let fields = line.split(separator: " ")
             guard fields.count >= 3,
                   let current = Int(fields[1]),
@@ -1184,14 +1229,8 @@ final class AppModel: ObservableObject {
             }
             if pwm == nil { pwm = (current, maxState) }
         }
-        if let pwm {
-            state.pwmPercent = Int((Double(pwm.current) / Double(pwm.max) * 100).rounded())
-        }
-
-        for line in (sections["FANSVC"] ?? "").split(separator: "\n") {
-            if line.hasPrefix("plugin=") { state.pluginRunning = line.hasSuffix("1") }
-        }
-        return state
+        guard let pwm else { return nil }
+        return Int((Double(pwm.current) / Double(pwm.max) * 100).rounded())
     }
 
     /// 取第一行里的第一个数字（`1234`、`53.4`、`1234 RPM` 都认）。
@@ -1668,6 +1707,37 @@ private extension AppModel {
         echo @@FANCTRL
         if [ -f /etc/config/gl_fanctrl ]; then echo installed; else echo missing; fi
         uci -q show gl_fanctrl 2>/dev/null
+        echo @@FANTEMP
+        cat /proc/gl-hw-info/temperature 2>/dev/null
+        for f in /sys/class/thermal/thermal_zone*/temp; do
+          if [ -r "$f" ]; then read -r v < "$f"; echo "$v"; break; fi
+        done
+        echo @@FANRPM
+        cat /proc/gl-hw-info/fan 2>/dev/null
+        for f in /sys/class/hwmon/hwmon*/fan1_input; do
+          if [ -r "$f" ]; then read -r v < "$f"; echo "$v"; break; fi
+        done
+        echo @@FANPWM
+        for d in /sys/class/thermal/cooling_device*; do
+          if [ -r "$d/cur_state" ]; then
+            t=$(cat "$d/type" 2>/dev/null)
+            c=$(cat "$d/cur_state" 2>/dev/null)
+            m=$(cat "$d/max_state" 2>/dev/null)
+            echo "$t $c $m"
+          fi
+        done
+        echo @@FANSVC
+        if ps 2>/dev/null | grep -q "[g]l-fanctrl-daemon"; then echo plugin=1; else echo plugin=0; fi
+        true
+        """)
+    }
+
+    /// 面板轮询用的轻量版：只有温度、转速、PWM、守护进程，没有 `uci show`。
+    ///
+    /// 配置那一段一天也变不了一次，没必要每 2 秒搬十几行回来；
+    /// 探测路径和 `fanStatusCommand` 保持一致，两个口子读数才不会打架。
+    var fanRuntimeCommand: String {
+        lowPriority("""
         echo @@FANTEMP
         cat /proc/gl-hw-info/temperature 2>/dev/null
         for f in /sys/class/thermal/thermal_zone*/temp; do

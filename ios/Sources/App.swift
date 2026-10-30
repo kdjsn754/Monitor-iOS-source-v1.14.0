@@ -335,15 +335,17 @@ struct TabBarGlass: ViewModifier {
 
 struct LoginView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var label = ""
     @State private var host = ""
     @State private var port = "22"
+    @State private var webPort = "80"
     @State private var user = "root"
     @State private var password = ""
     @State private var revealPassword = false
     @State private var didAutoConnect = false
     @FocusState private var focused: Field?
 
-    private enum Field: Hashable { case host, port, user, password }
+    private enum Field: Hashable { case label, host, port, webPort, user, password }
 
     var body: some View {
         ScrollView {
@@ -374,8 +376,10 @@ struct LoginView: View {
             didAutoConnect = true
             LocalNetworkPermission.shared.request()
             if let profile = model.currentProfile {
+                label = profile.label
                 host = profile.host
                 port = String(profile.port)
+                webPort = String(profile.webPortValue)
                 user = profile.user
                 password = KeychainStore.loadPassword(
                     account: KeychainStore.passwordAccount(for: profile)
@@ -414,8 +418,19 @@ struct LoginView: View {
     /// 原来每个输入框头顶都挂一行「路由器地址 / SSH 端口」的小标题，
     /// 五个控件五个标题，纵向被切成五段，视线每填一格就要重新落一次。
     /// 改成「左边标签、右边输入」的一行一项后，标签列是齐的，眼睛只往下扫。
+    ///
+    /// 标签原来用 `subheadline` + 次要色，在白卡上又小又灰，扫视时要凑近看；
+    /// 现在换成 16pt 中等粗细的正常文字色，标签是「项名」不是「提示」。
     private var credentialsCard: some View {
         VStack(spacing: 0) {
+            inputRow("名称") {
+                TextField("可选，例如 客厅路由器", text: $label)
+                    .submitLabel(.next)
+                    .focused($focused, equals: .label)
+                    .onSubmit { focused = .host }
+            }
+            formDivider
+
             inputRow("路由器地址") {
                 TextField("192.168.1.1", text: $host)
                     .keyboardType(.URL)
@@ -433,6 +448,17 @@ struct LoginView: View {
                     .keyboardType(.numberPad)
                     .submitLabel(.next)
                     .focused($focused, equals: .port)
+                    .onSubmit { focused = .webPort }
+            }
+            formDivider
+
+            // 网页后台的端口（LuCI）。和 SSH 端口分开：GL 固件常把 LuCI 挪到 8080，
+            // 之前只能在「编辑连接」里改，登录页填完连上之后还打不开网页后台。
+            inputRow("网页端口") {
+                TextField("80", text: $webPort)
+                    .keyboardType(.numberPad)
+                    .submitLabel(.next)
+                    .focused($focused, equals: .webPort)
                     .onSubmit { focused = .user }
             }
             formDivider
@@ -481,7 +507,8 @@ struct LoginView: View {
 
             HStack(spacing: 12) {
                 Text("自动登录")
-                    .font(.subheadline)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Toggle("", isOn: Binding(
                     get: { model.autoLogin },
@@ -503,15 +530,20 @@ struct LoginView: View {
     }
 
     /// 一行：左边是固定宽度的标签，右边是右对齐的输入。
+    ///
+    /// 标签给了 88pt 的固定列宽（最长的「路由器地址」也放得下），
+    /// 五个输入框的右边缘因此从同一条线起步；直接 `.fixedSize()` 的话
+    /// 「名称」和「路由器地址」两种行里的输入起点会差出三四十 pt。
     private func inputRow<Content: View>(_ title: String,
                                          @ViewBuilder field: () -> Content) -> some View {
         HStack(spacing: 12) {
             Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize()
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 88, alignment: .leading)
             field()
-                .font(.subheadline)
+                .font(.system(size: 16))
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -552,12 +584,18 @@ struct LoginView: View {
     private func connect() {
         focused = nil
         LocalNetworkPermission.shared.request()
+        // 端口留空或乱填都按默认走：SSH 22 / 网页 80。越界值在这里夹掉，
+        // 免得写进 profile 之后网页后台拼出一个打不开的 URL。
+        let sshPort = min(max(Int(port) ?? 22, 1), 65535)
+        let luciPort = min(max(Int(webPort) ?? 80, 1), 65535)
         Task {
             await model.connect(
                 host: host,
-                port: Int(port) ?? 22,
-                user: user,
-                password: password
+                port: sshPort,
+                user: user.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password,
+                label: label.trimmingCharacters(in: .whitespacesAndNewlines),
+                webPort: luciPort
             )
         }
     }

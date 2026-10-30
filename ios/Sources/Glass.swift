@@ -401,16 +401,66 @@ struct SheetIconButton: View {
 ///
 /// 以前每行都是独立的圆角块 + 一圈边框，三行下来像三张便利贴并排；
 /// 合起来之后才像系统里的分组列表。
+///
+/// 底色从 `secondarySystemBackground`（浅色下是 #F2F2F7 的一整块灰）改成纯白：
+/// 白面板 + 灰卡片这一层，行里的名字、IP 全被那块灰衬得发闷，四行以上整片糊成一块，
+/// 黑字也显灰。现在卡片和面板同色，靠一圈 hairline 描边 + 缩进分隔线划分行，
+/// 就是「白底黑字」该有的样子。
 struct SheetListCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         VStack(spacing: 0) { content() }
             .background(
-                Color(.secondarySystemBackground),
+                Color(.systemBackground),
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// 面板里的「分区卡」：图标 + 小标题在上，内容在下，白底 + 细边。
+///
+/// 主页面用的 `SectionCard` 走 `glassCard`，在渐变背景上是 `secondarySystemGroupedBackground`
+/// 的浅灰卡；这套色挪进面板就成了「白面板上压一堆灰方块」——正是用户说的那层灰。
+/// 面板里一律换成白底，只留 0.5pt 的边。
+struct SheetSectionCard<Content: View>: View {
+    let title: String
+    let icon: String
+    let content: Content
+
+    init(_ title: String, icon: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Color(.systemBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
     }
 }
 

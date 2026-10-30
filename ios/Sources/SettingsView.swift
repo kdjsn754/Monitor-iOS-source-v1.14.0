@@ -610,9 +610,13 @@ private struct RouterSwitcherSheet: View {
         .padding(.vertical, 30)
         .padding(.horizontal, 16)
         .background(
-            Color(.secondarySystemBackground),
+            Color(.systemBackground),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
     }
 
     private func row(_ profile: RouterProfile) -> some View {
@@ -646,10 +650,10 @@ private struct RouterSwitcherSheet: View {
                                 .lineLimit(1)
                             if isCurrent {
                                 Text("当前")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1.5)
-                                    .background(Color.green.opacity(0.16), in: Capsule())
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.14), in: Capsule())
                                     .foregroundStyle(.green)
                             }
                         }
@@ -664,7 +668,11 @@ private struct RouterSwitcherSheet: View {
 
                     if isConnecting {
                         ProgressView().controlSize(.mini)
-                    } else if !isCurrent {
+                    } else if isCurrent {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.green)
+                    } else {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.tertiary)
@@ -677,7 +685,9 @@ private struct RouterSwitcherSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isCurrent || isConnecting)
+            // 这里**不能**用 `.disabled(isCurrent)`：禁用会把整行 label 压淡，
+            // 当前那一行因此像蒙了一层灰（用户就是这么反馈的）。
+            // 当前行和「正在连」本来就被上面的 guard 挡住了，不需要禁用态。
 
             Button {
                 pendingDelete = profile
@@ -693,7 +703,6 @@ private struct RouterSwitcherSheet: View {
             .padding(.trailing, 12)
             .accessibilityLabel("删除 \(profile.title)")
         }
-        .background(isCurrent ? Color.blue.opacity(0.05) : Color.clear)
     }
 }
 

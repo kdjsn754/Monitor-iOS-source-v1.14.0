@@ -80,9 +80,13 @@ struct DeviceListView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 34)
         .background(
-            Color(.secondarySystemBackground),
+            Color(.systemBackground),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
     }
 
     /// 卡片里的一行：名字 + IP · MAC / 铅笔。
