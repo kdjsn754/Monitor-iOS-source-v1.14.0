@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 @MainActor
@@ -188,7 +189,7 @@ struct MainTabs: View {
         // 会导致最底行被盖住，正是之前截图里看到的现象）。
         .overlay(alignment: .bottom) {
             AppTabBar(selection: $selection)
-                .padding(.bottom, 10)
+                .padding(.bottom, AppTabBar.bottomPadding)
         }
         // 采集跟着页面走：切到哪一页就只采那一页要用的数据，设置页完全不采。
         .onChange(of: selection) { _, value in
@@ -202,55 +203,96 @@ struct MainTabs: View {
 
 /// 自绘的底部导航栏。
 ///
-/// 三枚图标都是「空心 / 实心」一对：没选中画空心，选中画实心并转成主色。
-/// 不给选中项铺浅色胶囊——那层淡蓝底和页面里的卡片打架，实心图标本身就够表明状态了。
+/// 尺寸是按另一款系统级 App 的底栏截图量出来的（402pt 宽的机器上）：
+/// 胶囊宽 274、高 62、离屏幕物理底边 21、内边距 4、三格等分；
+/// 选中项铺一块 `systemFill` 胶囊，图标换实心、文字加粗——
+/// 也就是系统 App 那种「只有一个选中项有底色」的写法，不再给图标上蓝色。
 struct AppTabBar: View {
     @Binding var selection: Int
 
-    /// 顺序即标签顺序：图标、实心底图、标题。
-    private let items: [(icon: String, filled: String, title: String)] = [
-        ("square.grid.2x2", "square.grid.2x2.fill", "概览"),
-        ("shield", "shield.fill", "代理"),
-        ("gearshape", "gearshape.fill", "设置")
+    private enum Metrics {
+        static let width: CGFloat = 274      // 胶囊总宽
+        static let height: CGFloat = 62      // 胶囊总高
+        static let inset: CGFloat = 4        // 胶囊内边距（选中胶囊离外框的距离）
+        static let icon: CGFloat = 26        // 图标框（墨迹约 23，和系统底栏的图标一样大）
+        static let label: CGFloat = 10       // 标签字号
+        static let bottomGap: CGFloat = 21   // 栏底到屏幕物理底边
+    }
+
+    private let items: [(glyph: TabGlyphKind, title: String)] = [
+        (.overview, "概览"),
+        (.proxy, "代理"),
+        (.settings, "设置")
     ]
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 itemView(index: index, item: item)
             }
         }
-        .padding(5)
+        .padding(Metrics.inset)
+        .frame(width: Metrics.width, height: Metrics.height)
         .modifier(TabBarGlass())
-        .padding(.horizontal, 24)
-        .padding(.top, 6)
-        .padding(.bottom, 3)
         .animation(.easeOut(duration: 0.16), value: selection)
     }
 
-    private func itemView(index: Int, item: (icon: String, filled: String, title: String)) -> some View {
+    private func itemView(index: Int, item: (glyph: TabGlyphKind, title: String)) -> some View {
         let isSelected = selection == index
         return Button {
             guard !isSelected else { return }
             selection = index
         } label: {
-            VStack(spacing: 3) {
-                // 统一框高：三枚符号的自带高度不一样（gearshape 比 shield 略高），
-                // 不框住的话选中切换时文字会上下抖一两个点。
-                Image(systemName: isSelected ? item.filled : item.icon)
-                    .font(.system(size: 24, weight: isSelected ? .semibold : .regular))
-                    .frame(height: 27)
+            VStack(spacing: 4) {
+                // 图标和文字都跟系统底栏一样用主色：选中与未选中的差别靠
+                // 「实心/空心 + 有没有底色 + 字重」来表达，不靠换色。
+                TabGlyph(kind: item.glyph, filled: isSelected)
+                    .frame(width: Metrics.icon, height: Metrics.icon)
                 Text(item.title)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: Metrics.label, weight: isSelected ? .semibold : .medium))
             }
-            .foregroundStyle(isSelected ? Color.blue : Color.secondary)
+            .foregroundStyle(Color.primary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
+            .frame(height: Metrics.height - Metrics.inset * 2)
+            .background {
+                if isSelected {
+                    Capsule(style: .continuous)
+                        .fill(Color(.systemFill))
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+}
+
+extension AppTabBar {
+    /// home indicator 那一截的高度（没有的机型为 0）。
+    @MainActor
+    private static var safeBottomInset: CGFloat {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
+            .keyWindow?.safeAreaInsets.bottom ?? 34
+    }
+
+    /// 让栏底落在离屏幕物理底边 21pt 的位置。
+    ///
+    /// 底栏是挂在 TabView 下沿的 overlay 上的，而 TabView 的边界是**安全区**边界
+    /// （底部让出了 home indicator 那 34pt）。所以要往下压 34-21=13pt，
+    /// 这里算成内边距就是负数；没有 home indicator 的机型（inset 为 0）会自然退回 21。
+    @MainActor
+    static var bottomPadding: CGFloat {
+        Metrics.bottomGap - safeBottomInset
+    }
+
+    /// 各页 ScrollView 底部要给底栏留的高度。
+    ///
+    /// = 栏高 + 栏底到屏幕底的距离 + 6 的一点余量 - 页面自己已经让出的安全区。
+    /// 写死 84 的话，栏往下压了 23pt 之后底部会多出一大块空白。
+    @MainActor
+    static var contentBottomInset: CGFloat {
+        Metrics.height + 6 + bottomPadding
     }
 }
 

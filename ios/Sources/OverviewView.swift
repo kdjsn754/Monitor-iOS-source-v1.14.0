@@ -31,7 +31,7 @@ struct OverviewView: View {
             // 给底栏留白：这页 ScrollView 自己声明底部 safe area，
             // 让最后一卡停在玻璃栏上方，不再被遮住（见 App.swift 的 overlay 说明）。
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 84)
+                Color.clear.frame(height: AppTabBar.contentBottomInset)
             }
             .refreshable {
                 await model.manualRefresh()

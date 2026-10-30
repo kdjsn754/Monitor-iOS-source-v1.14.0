@@ -50,7 +50,7 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             // 给底栏留白（见 App.swift 的 overlay 说明），最后一行不被玻璃栏遮住。
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 84)
+                Color.clear.frame(height: AppTabBar.contentBottomInset)
             }
             .sheet(item: $editorRoute) { route in
                 ConnectionEditorView(profile: route.profile)
