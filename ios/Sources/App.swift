@@ -220,11 +220,11 @@ struct AppTabBar: View {
                 itemView(index: index, item: item)
             }
         }
-        .padding(6)
+        .padding(5)
         .modifier(TabBarGlass())
-        .padding(.horizontal, 28)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 24)
+        .padding(.top, 6)
+        .padding(.bottom, 3)
         .animation(.easeOut(duration: 0.16), value: selection)
     }
 
@@ -234,18 +234,18 @@ struct AppTabBar: View {
             guard !isSelected else { return }
             selection = index
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 // 统一框高：三枚符号的自带高度不一样（gearshape 比 shield 略高），
                 // 不框住的话选中切换时文字会上下抖一两个点。
                 Image(systemName: isSelected ? item.filled : item.icon)
-                    .font(.system(size: 27, weight: isSelected ? .semibold : .regular))
-                    .frame(height: 31)
+                    .font(.system(size: 24, weight: isSelected ? .semibold : .regular))
+                    .frame(height: 27)
                 Text(item.title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
             }
             .foregroundStyle(isSelected ? Color.blue : Color.secondary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
+            .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
