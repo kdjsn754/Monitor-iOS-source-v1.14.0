@@ -704,7 +704,7 @@ final class AppModel: ObservableObject {
         if items.contains(.sensors) {
             updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         }
-        if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "", mtd: sections["MTD"] ?? "") }
+        if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "") }
         if items.contains(.devices) { updateDevices(sections["LEASES"] ?? "") }
         if items.contains(.clashState) {
             openClash = parseOpenClashInfo(sections, current: openClash)
@@ -1063,7 +1063,7 @@ final class AppModel: ObservableObject {
         stats.memoryUsed = total > available ? total - available : 0
     }
 
-    private func updateFlash(_ text: String, mtd: String = "") {
+    private func updateFlash(_ text: String) {
         var romTotal: UInt64 = 0
         var romUsed: UInt64 = 0
         var fsTotal: UInt64 = 0
@@ -1085,29 +1085,24 @@ final class AppModel: ObservableObject {
             }
         }
 
-        // 没有 overlay 的纯只读系统（个别固件）：df / 和 df /rom 报的是同一个 squashfs，
-        // 直接相加会把固件算两遍，这里认出来就只保留一份。
+        // 没有 overlay 的纯只读固件（少见）：df / 和 df /rom 报的是同一个 squashfs，
+        // 直接相加会把固件算两遍，认出来就只留一份。
         if fsTotal > 0, fsTotal == romTotal, fsUsed == romUsed {
             fsUsed = 0
             fsAvail = 0
         }
 
-        // 旧版这里 df 的是 /rom /overlay /，再用「squashfs 用量 + overlay 总量」
-        // 当总容量；而 squashfs 的 Size 是镜像本身、overlay 的 Size 又是另一个分区，
-        // 两者相加会超过实际闪存（常见 512 MB 的机器读出 560 MB）。
-        // 现在总容量直接取 /proc/mtd 各分区 size 之和，那是物理闪存的真实划分。
         let used = romUsed &+ fsUsed
-        var capacity = mtdCapacity(mtd)
+        // 总容量只按系统真实看得见的两块算：只读固件 + 可写分区（已用 + 剩余）。
+        // 不再用「squashfs 镜像 + overlay 分区总量」相加，也不再读 /proc/mtd ——
+        // 那条路上同一段闪存会被算两遍，读出来比物理容量还大。
+        var capacity = used &+ fsAvail
         if capacity == 0 {
-            // 没有 /proc/mtd（eMMC + GPT 之类的机型）：退回两个分区的总量之和。
-            capacity = romTotal &+ max(fsTotal, fsUsed &+ fsAvail)
-        }
-        // 读到明显偏小（extroot 把 overlay 挪到 U 盘、或者只读到了部分分区）时，
-        // 用「已用 + 剩余」兜底，宁可少算一点也不能出现已用超过总量。
-        if capacity < used &+ fsAvail {
-            capacity = used &+ fsAvail
+            // 两个 df 都没读到内容：退回只读固件自身的容量，总比显示 0 强。
+            capacity = romTotal &+ fsTotal
         }
         guard capacity > 0 else { return }
+        if capacity < used { capacity = used }
 
         flashInfo = FlashInfo(
             total: capacity,
@@ -1115,19 +1110,6 @@ final class AppModel: ObservableObject {
             appUsed: fsUsed,
             available: capacity > used ? capacity - used : 0
         )
-    }
-
-    /// /proc/mtd 每行形如 `mtd3: 1d000000 00020000 "ubi"`，第二列就是分区字节数（十六进制）。
-    /// 各分区首尾相连铺满整块闪存，所以求和就是闪存总容量。
-    private func mtdCapacity(_ text: String) -> UInt64 {
-        var total: UInt64 = 0
-        for line in text.split(separator: "\n") {
-            let fields = line.split(separator: " ").map(String.init)
-            guard fields.count >= 2, fields[0].hasSuffix(":") else { continue }
-            guard let size = UInt64(fields[1], radix: 16) else { continue }
-            total &+= size
-        }
-        return total
     }
 
     private func updateNetwork(_ text: String) {
@@ -1377,14 +1359,10 @@ final class AppModel: ObservableObject {
         }
         let hidden = UserDefaults.standard.stringArray(forKey: "hiddenModules") ?? []
         hiddenModules = Set(hidden.compactMap(OverviewModule.init(rawValue:)))
-        let missing = OverviewModule.allCases.filter { !moduleOrder.contains($0) }
-        for module in missing {
-            if module == .flash,
-               let resourcesIndex = moduleOrder.firstIndex(of: .resources) {
-                moduleOrder.insert(.flash, at: resourcesIndex + 1)
-            } else {
-                moduleOrder.append(module)
-            }
+        // 旧配置里可能有已被删掉的模块（v1.27 把「资源占用」并进了「硬件状态」），
+        // compactMap 时已经丢掉；新版新增的模块直接补在末尾。
+        for module in OverviewModule.allCases where !moduleOrder.contains(module) {
+            moduleOrder.append(module)
         }
     }
 
@@ -1462,14 +1440,12 @@ private extension AppModel {
             """
         case .flash:
             // /rom 是只读 squashfs（df 的 Used 就是整块固件），/ 是 overlayfs
-            // （等于可写分区）。两个加起来才是「真正占掉的闪存」。
-            // 总容量不再靠自己加，改成读 /proc/mtd 里各分区的 size 求和——
-            // 那是内核对闪存分区的真实划分，比 df 的推算靠谱。
+            // （等于可写分区）。只取这两行，不再读 /proc/mtd：那里既有整块固件分区、
+            // 又有从它切出来的子分区（kernel / rootfs / rootfs_data），求和在不少机型上
+            // 会把同一段空间算两遍，512 MB 的机器能读出 1 GB 来。
             return """
             echo @@FLASH
             df -k /rom / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "ROM",$2,$3; else if($NF=="/")print "ROOT",$2,$3,$4}'
-            echo @@MTD
-            cat /proc/mtd 2>/dev/null
             true
 
             """

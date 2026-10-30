@@ -3,8 +3,11 @@ import SwiftUI
 /// 全部在线设备。
 ///
 /// 以前是从概览卡片 NavigationLink 推一个二级页出来，为了看一眼 IP 就得离开首页、
-/// 还得再返回一次。现在改成弹窗：卡片上点「查看全部设备」直接浮起来，看完下拉或
+/// 还得再返回一次。现在改成弹窗：卡片上点「查看全部」直接浮起来，看完下拉或
 /// 点「完成」就回去，概览的滚动位置和实时曲线都不受影响。
+///
+/// 版式统一成「34pt 头像 + 名字 + IP · MAC 两行」：所有行共用一条左边界、
+/// 同样 10pt 上下留白，名字长短不会再把右边的内容顶来顶去。
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -13,11 +16,15 @@ struct DeviceListView: View {
     @State private var showRename = false
     @State private var draftName = ""
 
+    /// 头像 34 + 间距 12 + 行内左边距 12 = 58，分隔线从这个位置开始，
+    /// 正好和文字的左边对齐。
+    private let dividerInset: CGFloat = 58
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    summary
+                    header
                     if model.devices.isEmpty {
                         emptyState
                     } else {
@@ -26,17 +33,17 @@ struct DeviceListView: View {
                             // 换成 IP 行才不会每 2 秒被整体重建一次。
                             ForEach(Array(model.devices.enumerated()), id: \.element.ip) { index, device in
                                 if index > 0 {
-                                    Divider().padding(.leading, 52)
+                                    Divider().opacity(0.6).padding(.leading, dividerInset)
                                 }
                                 row(device)
                             }
                         }
-                        .glassCard(padding: 4, cornerRadius: 18)
+                        .glassCard(padding: 0, cornerRadius: 18)
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .padding(.top, 10)
+                .padding(.bottom, 28)
             }
             .background(Color.clear)
             .navigationTitle("连接设备")
@@ -64,26 +71,33 @@ struct DeviceListView: View {
         .presentationDragIndicator(.visible)
     }
 
-    private var summary: some View {
-        HStack(spacing: 10) {
+    private var header: some View {
+        HStack(spacing: 12) {
             ZStack {
                 Circle()
                     .fill(Color.blue.opacity(0.12))
-                    .frame(width: 38, height: 38)
+                    .frame(width: 40, height: 40)
                 Image(systemName: "laptopcomputer.and.iphone")
-                    .font(.system(size: 16))
+                    .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(.blue)
             }
+
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(model.devices.count) 台设备")
-                    .font(.headline)
-                Text("来自路由器 DHCP 租约 · 点一行可改名称")
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("\(model.devices.count)")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.blue)
+                    Text("台设备")
+                        .font(.subheadline.weight(.medium))
+                }
+                Text("DHCP 租约 · 点一行可改名")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
     }
 
@@ -110,21 +124,22 @@ struct DeviceListView: View {
         } label: {
             HStack(spacing: 12) {
                 Text(initial(name))
-                    .font(.caption.weight(.bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.blue)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 34, height: 34)
                     .background(Color.blue.opacity(0.12), in: Circle())
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(name)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                     Text("\(device.ip) · \(device.mac.uppercased())")
-                        .font(.caption2.monospaced())
+                        .font(.system(size: 11).monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        .truncationMode(.middle)
                 }
 
                 Spacer(minLength: 8)
@@ -132,11 +147,11 @@ struct DeviceListView: View {
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(Color.blue.opacity(0.10), in: Circle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

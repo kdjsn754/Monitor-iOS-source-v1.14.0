@@ -65,12 +65,10 @@ struct OverviewView: View {
         switch module {
         case .speed:
             moduleCard(module) { speedContent }
-        case .resources:
-            resourcesCards
-        case .flash:
-            moduleCard(module) { flashContent }
         case .hardware:
             moduleCard(module) { hardwareContent }
+        case .flash:
+            moduleCard(module) { flashContent }
         case .devices:
             moduleCard(module) { devicesContent }
         case .system:
@@ -95,9 +93,11 @@ struct OverviewView: View {
     private var speedContent: some View {
         VStack(spacing: 10) {
             HStack {
-                speedValue("下载", value: formatSpeed(model.stats.download), color: .blue, icon: "arrow.down")
+                speedValue("下载", value: formatSpeed(model.stats.download),
+                           color: .blue, icon: "arrow.down.circle.fill")
                 Divider().frame(height: 34)
-                speedValue("上传", value: formatSpeed(model.stats.upload), color: .purple, icon: "arrow.up")
+                speedValue("上传", value: formatSpeed(model.stats.upload),
+                           color: .purple, icon: "arrow.up.circle.fill")
             }
             SpeedSparkline(points: model.history)
             HStack {
@@ -122,33 +122,6 @@ struct OverviewView: View {
                 .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var resourcesCards: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ResourceRingCard(
-                title: "CPU",
-                icon: "cpu",
-                accent: .orange,
-                percent: model.stats.cpu,
-                topRight: model.routerInfo.cpuCores > 0
-                    ? "\(model.routerInfo.cpuCores) 核" : "-- 核",
-                bottom: String(
-                    format: "负载 %.2f / %.2f / %.2f",
-                    model.stats.load,
-                    model.stats.load5,
-                    model.stats.load15
-                )
-            )
-            ResourceRingCard(
-                title: "内存",
-                icon: "memorychip",
-                accent: .indigo,
-                percent: model.memoryFraction * 100,
-                topRight: "可用 \(formatBytes(Double(max(0, model.stats.memoryTotal - model.stats.memoryUsed))))",
-                bottom: "\(formatBytes(Double(model.stats.memoryUsed))) / \(formatBytes(Double(model.stats.memoryTotal)))"
-            )
-        }
     }
 
     private var flashContent: some View {
@@ -244,24 +217,54 @@ struct OverviewView: View {
         return .blue
     }
 
+    /// 硬件状态的「两块」：上一排是温度和风扇的读数格，
+    /// 下一排是 CPU 和内存的圆环——CPU / 内存本来就是同一块板子上的硬件，
+    /// 分成两张卡反而要多一次标题和一圈留白。
     private var hardwareContent: some View {
-        HStack(spacing: 12) {
-            hardwareTile(
-                icon: temperatureIcon,
-                title: "温度",
-                value: model.stats.temperature.map { String(format: "%.1f °C", $0) } ?? "无传感器",
-                color: temperatureTone,
-                badge: temperatureBadge
-            )
-            hardwareTile(
-                // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
-                icon: "fanblades",
-                title: "风扇",
-                value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
-                color: fanTone,
-                badge: fanBadge,
-                spin: model.stats.fanRPM
-            )
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                hardwareTile(
+                    icon: temperatureIcon,
+                    title: "温度",
+                    value: model.stats.temperature.map { String(format: "%.1f °C", $0) } ?? "无传感器",
+                    color: temperatureTone,
+                    badge: temperatureBadge
+                )
+                hardwareTile(
+                    // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
+                    icon: "fanblades",
+                    title: "风扇",
+                    value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
+                    color: fanTone,
+                    badge: fanBadge,
+                    spin: model.stats.fanRPM
+                )
+            }
+
+            HStack(spacing: 12) {
+                HardwareGauge(
+                    title: "CPU",
+                    icon: "cpu",
+                    accent: .orange,
+                    percent: model.stats.cpu,
+                    note: model.routerInfo.cpuCores > 0
+                        ? "\(model.routerInfo.cpuCores) 核" : "-- 核",
+                    detail: String(
+                        format: "负载 %.2f / %.2f / %.2f",
+                        model.stats.load,
+                        model.stats.load5,
+                        model.stats.load15
+                    )
+                )
+                HardwareGauge(
+                    title: "内存",
+                    icon: "memorychip",
+                    accent: .indigo,
+                    percent: model.memoryFraction * 100,
+                    note: "可用 \(formatBytes(Double(max(0, model.stats.memoryTotal - model.stats.memoryUsed))))",
+                    detail: "\(formatBytes(Double(model.stats.memoryUsed))) / \(formatBytes(Double(model.stats.memoryTotal)))"
+                )
+            }
         }
     }
 
@@ -346,95 +349,56 @@ struct OverviewView: View {
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// 连接设备：左边一律「头像 + 名字 / IP」两行，右边不再放任何数字，
-    /// 所有文字共用同一条左边界。旧版是「名字左、IP 右」两端对齐，
-    /// 设备名长短不一，右侧 IP 就被顶得忽左忽右，看起来整块都是歪的。
+    /// 连接设备只给一个概括：总数 + 来源 + 「查看全部」。
+    /// 概览页不再把设备名一条条铺出来——名字长短不一会把整张卡撑得参差不齐，
+    /// 也挡住了下面真正要看的系统信息。明细都留在弹窗里。
     private var devicesContent: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("\(model.devices.count)")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.12))
+                    .frame(width: 44, height: 44)
+                Image(systemName: "laptopcomputer.and.iphone")
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.blue)
-                Text("台设备在线")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("\(model.devices.count)")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.blue)
+                    Text("台设备在线")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text("DHCP 租约")
                     .font(.caption2)
                     .foregroundStyle(Color(.tertiaryLabel))
             }
-            .padding(.bottom, 8)
 
-            if model.devices.isEmpty {
-                Text("还没读到 DHCP 租约，下一轮刷新再看")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 6)
-            } else {
-                // 用 IP 当标识：DeviceInfo 每轮都重建，UUID 每次都变，
-                // 会让这几行每 2 秒被整体重建一次。
-                ForEach(Array(model.devices.prefix(4).enumerated()), id: \.element.ip) { index, device in
-                    if index > 0 {
-                        Divider().opacity(0.6).padding(.leading, 38)
-                    }
-                    deviceRow(device)
-                }
+            Spacer(minLength: 8)
 
-                Divider().opacity(0.6).padding(.top, 2)
-
+            if !model.devices.isEmpty {
                 Button {
                     showAllDevices = true
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(model.devices.count > 4
-                             ? "查看全部 \(model.devices.count) 台设备"
-                             : "查看全部设备")
-                        Spacer(minLength: 0)
+                    HStack(spacing: 3) {
+                        Text("查看全部")
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
                     }
-                    .font(.footnote.weight(.medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.blue)
-                    .padding(.top, 10)
-                    .contentShape(Rectangle())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.10), in: Capsule())
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    /// 一行设备：30pt 圆底首字母 + 名字 / IP。行高固定，四行高度不会因为
-    /// 名字里有没有中文、有没有改名而参差。
-    private func deviceRow(_ device: DeviceInfo) -> some View {
-        HStack(spacing: 8) {
-            Text(initial(of: device))
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.blue)
-                .frame(width: 30, height: 30)
-                .background(Color.blue.opacity(0.12), in: Circle())
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(model.displayName(for: device))
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(device.ip)
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 6)
-        }
-        .padding(.vertical, 7)
-        .contentShape(Rectangle())
-    }
-
-    private func initial(of device: DeviceInfo) -> String {
-        let name = model.displayName(for: device)
-        guard let first = name.first, first.isLetter || first.isNumber else { return "?" }
-        return String(first).uppercased()
     }
 
     private var systemContent: some View {
@@ -534,51 +498,53 @@ private struct SpeedSparkline: View {
     }
 }
 
-private struct ResourceRingCard: View {
+/// CPU / 内存的小圆环块：浅灰底（和温度、风扇两个格子同一种底），
+/// 上面一行是图标底板 + 名称 + 右上角小字，下面是圆环和一行明细。
+private struct HardwareGauge: View {
     let title: String
     let icon: String
     let accent: Color
     let percent: Double
-    let topRight: String
-    let bottom: String
+    let note: String
+    let detail: String
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 7) {
-                // 和「硬件状态」同一个做法：淡色圆角底 + 系统图标，
-                // 不再是裸图标贴在标题前面（那样一眼看过去像两个字母飘着）。
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(accent.opacity(0.12))
-                        .frame(width: 26, height: 26)
+                        .frame(width: 22, height: 22)
                     Image(systemName: icon)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(accent)
                 }
 
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.medium))
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
 
-                Text(topRight)
-                    .font(.caption2)
+                Text(note)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
 
-            RingGauge(percent: percent, accent: accent)
+            RingGauge(percent: percent, accent: accent, diameter: 88, lineWidth: 10)
 
-            Text(bottom)
-                .font(.caption2)
+            Text(detail)
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
+        .padding(10)
         .frame(maxWidth: .infinity)
-        .glassCard(padding: 11, cornerRadius: 16)
+        .background(Color(.tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

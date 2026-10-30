@@ -259,10 +259,10 @@ struct ProxyView: View {
             VStack(spacing: 12) {
                 HStack(spacing: 12) {
                     flowBlock("下载", value: formatSpeed(metrics.download),
-                              icon: "arrow.down", color: .blue)
+                              icon: "arrow.down.circle.fill", color: .blue)
                     Divider().frame(height: 42)
                     flowBlock("上传", value: formatSpeed(metrics.upload),
-                              icon: "arrow.up", color: .purple)
+                              icon: "arrow.up.circle.fill", color: .purple)
                 }
 
                 Divider().opacity(0.5)

@@ -2,6 +2,21 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.27.0 — CPU/内存并入硬件状态、设备卡只看概括、闪存总量回归
+
+- **CPU 与内存并进「硬件状态」**：删掉独立的 `resources` 模块与 `ResourceRingCard`，
+  硬件卡变成「温度 / 风扇」一排 + 「CPU / 内存」一排，四块同一种浅灰底；
+  新增 `HardwareGauge`（22pt 图标底板 + 名称 + 右上小字 + 88pt 圆环 + 明细）。
+  `OverviewModule` 去掉 `.resources`，`loadModules` 的 flash 特判一并简化。
+- **下载/上传箭头统一**：概览 `speedValue` 与代理页 `flowBlock` 都改用
+  `arrow.down.circle.fill` / `arrow.up.circle.fill`，与「本次累计」一致。
+- **闪存总量不再读 `/proc/mtd`**：分区表在部分机型上把整块固件分区和它的子分区
+  都列出来，求和会重复计算；改回 `df -k /rom /`，总容量 = 已用 + 剩余，
+  并删掉 `mtdCapacity(_:)`。
+- **连接设备**：概览改为「设备数 + 台设备在线 + DHCP 租约 + 查看全部」一行概括；
+  `DeviceListView` 重排为 34pt 头像 + 名字 + `IP · MAC` 两行，行距与分隔线缩进统一。
+- 版本 1.27.0 / build 40。
+
 ## v1.26.0 — 设备卡重排、闪存总量改读分区表、风扇真的会转
 
 - **连接设备卡重排**：行结构统一为「30pt 圆底首字母 + 名字 + IP」，

@@ -2,9 +2,8 @@ import Foundation
 
 enum OverviewModule: String, CaseIterable, Codable, Identifiable {
     case speed
-    case resources
-    case flash
     case hardware
+    case flash
     case devices
     case system
 
@@ -13,9 +12,8 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .speed: return "实时速度"
-        case .resources: return "资源占用"
-        case .flash: return "闪存"
         case .hardware: return "硬件状态"
+        case .flash: return "闪存"
         case .devices: return "连接设备"
         case .system: return "系统信息"
         }
@@ -24,9 +22,8 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
     var subtitle: String {
         switch self {
         case .speed: return "上下行速率与速度曲线"
-        case .resources: return "CPU 与内存使用率"
-        case .flash: return "系统、应用程序与可用空间"
-        case .hardware: return "温度和风扇转速"
+        case .hardware: return "CPU、内存、温度与风扇"
+        case .flash: return "已用与剩余空间"
         case .devices: return "DHCP 租约设备"
         case .system: return "主机、固件、内核与负载"
         }
@@ -35,9 +32,8 @@ enum OverviewModule: String, CaseIterable, Codable, Identifiable {
     var icon: String {
         switch self {
         case .speed: return "speedometer"
-        case .resources: return "cpu"
-        case .flash: return "internaldrive"
         case .hardware: return "thermometer.medium"
+        case .flash: return "internaldrive"
         case .devices: return "laptopcomputer.and.iphone"
         case .system: return "info.circle"
         }
@@ -155,10 +151,9 @@ struct FlashInfo {
 
     var hasData: Bool { total > 0 }
 
-    /// total 取自 /proc/mtd 各分区之和（物理闪存的真实大小），
-    /// 所以「已用 + 剩余 = 共」恒成立，圆环填到哪儿和百分比也是同一个数。
-    /// systemUsed 是只读固件（squashfs）的大小，appUsed 是可写分区（overlayfs）已用，
-    /// 两者相加才是真正被占掉的闪存。
+    /// total 只由系统看得见的两块算出来：只读固件（squashfs）+ 可写分区，
+    /// 所以永远不会超过物理闪存，「已用 + 剩余 = 共」也恒成立，
+    /// 圆环填到哪儿和中间的百分比是同一个数。
     var usedBytes: UInt64 {
         guard total > 0 else { return 0 }
         return min(total, systemUsed &+ appUsed)

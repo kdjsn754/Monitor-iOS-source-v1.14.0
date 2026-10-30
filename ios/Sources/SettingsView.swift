@@ -379,7 +379,7 @@ struct SettingsView: View {
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 10) {
-                infoRow("版本", "1.26.0")
+                infoRow("版本", "1.27.0")
                 Divider().opacity(0.5)
                 infoRow("连接方式", "SSH 直连")
             }
