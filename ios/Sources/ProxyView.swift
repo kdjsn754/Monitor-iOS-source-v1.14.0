@@ -9,18 +9,22 @@ struct ProxyView: View {
 
     private var oc: OpenClashInfo { model.openClash }
     private var metrics: OpenClashMetrics { model.ocMetrics }
+    /// 只要确认装着就按运行状态上色；其余情况一律灰色（不能给「没装」和「没读过」配色）。
     private var accent: Color {
-        if !oc.installed { return .gray }
+        guard oc.installed else { return .gray }
         return oc.running ? .green : .orange
     }
 
+    /// 还在读的时候说「读取中」，读完才敢下「未检测到插件」这种结论。
     private var statusText: String {
-        if !oc.installed { return "未检测到插件" }
-        return oc.running ? "运行中" : "已停止"
+        if oc.installed { return oc.running ? "运行中" : "已停止" }
+        return model.ocStateLoaded ? "未检测到插件" : "读取中"
     }
 
     private var statusDetail: String {
-        if !oc.installed { return "未检测到 OpenClash" }
+        if !oc.installed {
+            return model.ocStateLoaded ? "未检测到 OpenClash" : "正在读取 OpenClash 状态…"
+        }
         if !oc.running { return "服务已停止，启动后可查看流量" }
         // 面板地址已经挪到卡片下半部分，这里改说「当前跑的是哪份配置」，
         // 不再重复一遍端口号。
@@ -127,6 +131,11 @@ struct ProxyView: View {
                 Divider().opacity(0.5)
 
                 panelBlock
+            } else if !model.ocStateLoaded {
+                // 第一拍还没回来：给一条「正在读取」，别把这块留白，也别急着下结论。
+                // 以前这里直接按「没装」渲染，于是进页面先看到一句
+                // 「未检测到插件」，几秒后按钮才整排蹦出来。
+                loadingRow
             } else {
                 Text("确认路由器已安装 OpenClash 插件，且 SSH 账号有权限读取 /etc/config/openclash。")
                     .font(.caption2)
@@ -136,6 +145,20 @@ struct ProxyView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+    }
+
+    private var loadingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("正在读取模式与配置…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 11)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .softTile(.blue, radius: 12)
     }
 
     /// 面板：一行「图标 + 标题 + 状态标签 + 地址」，下面一条整宽主按钮。
@@ -425,7 +448,11 @@ struct ProxyView: View {
 
                         Spacer(minLength: 4)
 
-                        if oc.configs.isEmpty {
+                        if !model.ocStateLoaded {
+                            // 还没读到配置列表：转圈，别先写一句「未找到」把人劝走。
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else if oc.configs.isEmpty {
                             Text("未找到")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
@@ -453,11 +480,13 @@ struct ProxyView: View {
     }
 
     private var configTitle: String {
+        guard model.ocStateLoaded else { return "读取中…" }
         guard !oc.config.isEmpty else { return "未选择" }
         return (oc.config as NSString).lastPathComponent
     }
 
     private var configDetail: String {
+        guard model.ocStateLoaded else { return "正在读取配置文件列表" }
         guard !oc.configs.isEmpty else { return "没有可用配置" }
         return "共 \(oc.configs.count) 个配置文件"
     }

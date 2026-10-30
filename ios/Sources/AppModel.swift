@@ -33,6 +33,14 @@ final class AppModel: ObservableObject {
     @Published var deviceAliases: [String: String] = [:]
 
     @Published var openClash = OpenClashInfo()
+    /// OpenClash 的完整状态（装没装、代理模式、配置列表）是否已经成功问过一次。
+    ///
+    /// 「还没问」和「问过、确定没装」是两件事。以前两种情况都用默认值 false 表示，
+    /// 于是刚进网络代理页的那几秒，界面会一口咬定「未检测到插件」，
+    /// 顶部那两排按钮也跟着被整段拿掉——用户看到的就是「空白很久，按钮才蹦出来」。
+    @Published private(set) var ocStateLoaded = false
+    /// 状态探针正在跑（进代理页时先单独问一次，不等那条要 curl 内核的指标命令）。
+    @Published private(set) var ocStateLoading = false
     @Published var ocMetrics = OpenClashMetrics()
     @Published var accessChecks = AccessCheck.Site.allCases.map { AccessCheck(site: $0) }
     @Published var history: [HistoryPoint] = []
@@ -260,6 +268,9 @@ final class AppModel: ObservableObject {
         routerInfo = RouterInfo()
         devices = []
         flashInfo = FlashInfo()
+        openClash = OpenClashInfo()
+        ocStateLoaded = false
+        ocStateLoading = false
         ocMetrics = OpenClashMetrics()
         history = []
         await bootstrapRefresh()
@@ -462,6 +473,11 @@ final class AppModel: ObservableObject {
         lastReconnectAttempt = nil
         status = "未连接"
         resetSamplingBaselines()
+        // 断开之后这些状态就不再可信了：留着的话下次连上别的路由器，
+        // 代理页会先拿上一台的插件状态和配置列表糊一遍。
+        openClash = OpenClashInfo()
+        ocStateLoaded = false
+        ocStateLoading = false
         if !keepPassword, let profile = currentProfile {
             KeychainStore.deletePassword(account: KeychainStore.passwordAccount(for: profile))
         }
@@ -597,8 +613,35 @@ final class AppModel: ObservableObject {
         // 离开网络代理页就把还没跑的自动检测作废，别在别的页面上偷偷跑 curl。
         pendingAccessCheck = page == .proxy
         activePage = page
+        // 上一页的轮询先停下：切页的空窗里不该还在采别的数据。
+        pollTask?.cancel()
+        pollTask = nil
         guard connected else { return }
-        startPolling(refreshNow: true)
+        guard page == .proxy else {
+            startPolling(refreshNow: true)
+            return
+        }
+        // 先单独问一次 OpenClash 状态，拿到就画按钮，然后才开周期采集。
+        //
+        // 这一条只有 pidof + 几次 uci，比那条要 curl 内核接口的指标命令快一个数量级；
+        // 混在一起跑，就会出现「流量已经动起来了、启动/关闭/重启还不见」的样子。
+        ocStateLoading = true
+        Task {
+            await self.runOpenClashProbe()
+            // 探针跑完时用户可能已经切走了：那就别再按「代理页」的节奏重开轮询，
+            // 目标页自己的 startPolling 已经在跑了。
+            guard self.activePage == .proxy else { return }
+            self.startPolling(refreshNow: true)
+        }
+    }
+
+    /// 只问「装没装、跑的哪个模式、有哪些配置」，不碰流量。
+    ///
+    /// 它决定网络代理页顶部那两排按钮和配置条能不能画出来。
+    /// 失败不弹红字——大概率只是 SSH 通道正忙着，下一轮轮询会自己补上。
+    private func runOpenClashProbe() async {
+        defer { ocStateLoading = false }
+        try? await runItems([.clashState])
     }
 
     /// 轮询循环：固定间隔，跑的永远是当前页面的那一组数据。
@@ -612,7 +655,10 @@ final class AppModel: ObservableObject {
         guard !periodicItems.isEmpty else { return }
         // 上一轮刚跑完（比如切页切得很快）就不再插队，直接进循环。
         let justPolled = lastTickAt.map { Date().timeIntervalSince($0) < 0.8 } ?? false
-        let immediate = refreshNow && !justPolled
+        // 但「只取一次」的那项不能跟着一起挡：上一轮跑的是别的页面的周期采集，
+        // 挡掉之后 OpenClash 的状态和配置列表就一直是空的，按钮要等一整轮才出来。
+        let needOnce = activePage == .proxy && !ocStateLoaded
+        let immediate = refreshNow && (!justPolled || needOnce)
         pollTask = Task { [weak self] in
             guard let self else { return }
             if immediate {
@@ -629,7 +675,9 @@ final class AppModel: ObservableObject {
                 }
                 if Task.isCancelled { return }
                 let started = Date()
-                await self.pollTick()
+                // 状态探针要是没跑成（通道当时正忙），每一拍都捎上它，
+                // 直到拿到为止——否则按钮会一直缺着，直到下次切页。
+                await self.pollTick(includeOnce: self.activePage == .proxy && !self.ocStateLoaded)
                 if Task.isCancelled { return }
                 // 这一轮本身要花时间（/traffic 是流式接口，至少一秒才吐第一行），
                 // 把耗时从间隔里扣掉，实际刷新节奏才和用户设置的一致。
@@ -662,7 +710,11 @@ final class AppModel: ObservableObject {
     /// includeOnce 为真时连「只在进页面时取」的项一起跑（切页后的第一轮）。
     private func pollTick(includeOnce: Bool = false) async {
         guard connected else { return }
-        let items = includeOnce ? activeItems : periodicItems
+        var items = includeOnce ? activeItems : periodicItems
+        // 进页面时那条独立的探针已经问过（或正在问）状态了，这一拍不用再问一遍。
+        if includeOnce, ocStateLoaded || ocStateLoading {
+            items = items.filter { $0 != .clashState }
+        }
         guard !items.isEmpty else { return }
         lastTickAt = Date()
         do {
@@ -723,6 +775,8 @@ final class AppModel: ObservableObject {
         if !state.isEmpty {
             info.installed = ["running", "stopped", "installed"].contains(state)
             info.running = state == "running"
+            // 插件确实不存在时，就不用再等状态查询了：结果已经是确定的。
+            if state == "missing" { ocStateLoaded = true }
         }
         if let port = Int(firstLine(sections["OCPORT"])), port > 0 {
             info.panelPort = port
@@ -973,6 +1027,10 @@ final class AppModel: ObservableObject {
                                     current: OpenClashInfo) -> OpenClashInfo {
         var info = current
         let state = firstLine(sections["OCSTATE"])
+        // 没拿到状态段（通道忙、脚本被切断）就原样返回：默认值是 installed = false，
+        // 一次读失败就会被当成「路由器上没装 OpenClash」，那是句假话。
+        guard !state.isEmpty else { return info }
+        ocStateLoaded = true
         info.installed = ["running", "stopped", "installed"].contains(state)
         info.running = state == "running"
         if !info.running {
