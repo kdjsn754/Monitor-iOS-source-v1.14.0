@@ -74,7 +74,7 @@ permissions:
   contents: read
 
 # ⚠️ 写这个文件里的 shell 时，变量紧挨着中文/全角标点必须写成 ${var}。
-# macOS 运行器的 /bin/bash 是 3.2，不认 UTF-8：`$app（` 会把「（」的第一个字节
+# macOS 运行器的 /bin/bash 是 3.2，不认 UTF-8：`${app}（` 会把「（」的第一个字节
 # 当成变量名的一部分，去找一个叫 `app\xef` 的变量；因为脚本开头有 set -u，
 # 于是直接 `app?: unbound variable` 报错退出（2026-10-30 实际踩过一次）。
 
@@ -366,6 +366,31 @@ jobs:
             -scheme OpenWrtMonitor \
             -clonedSourcePackagesDirPath build/spm
 
+      # 归档前先确认产物名不是空的。PRODUCT_NAME 解析成空串时，Xcode 会把产物
+      # 放到 .../Applications/.app，然后报一句很难懂的
+      # "error: Multiple commands produce '.../Applications/.app'"（2026-10-30 踩过）。
+      # 这里提前把它打印出来并硬性拦住，报错信息直接指向真实原因。
+      - name: 检查产物名（PRODUCT_NAME）
+        working-directory: ${{ env.IOS_DIR }}
+        timeout-minutes: 8
+        run: |
+          set -u
+          out="$(perl -e 'alarm shift; exec @ARGV' 420 \
+            xcodebuild -showBuildSettings \
+              -project OpenWrtMonitor.xcodeproj \
+              -scheme OpenWrtMonitor \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' 2>/dev/null || true)"
+          echo "--- 关键构建设置 ---"
+          echo "$out" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
+          pname="$(echo "$out" | awk -F' = ' '/^ *PRODUCT_NAME = /{print $2; exit}' | tr -d '[:space:]')"
+          if [ -z "$pname" ]; then
+            echo "::error::PRODUCT_NAME 是空的。这样归档产物会变成 Applications/.app 并触发「Multiple commands produce」。请在 ios/project.yml 的 settings.base 里写死 PRODUCT_NAME: OpenWrtMonitor。"
+            exit 1
+          fi
+          echo "PRODUCT_NAME = ${pname}（正常）"
+
       - name: 构建（不签名）
         working-directory: ${{ env.IOS_DIR }}
         timeout-minutes: 20
@@ -383,6 +408,7 @@ jobs:
             -clonedSourcePackagesDirPath build/spm \
             -resultBundlePath build/OpenWrtMonitor.xcresult \
             -quiet \
+            PRODUCT_NAME=OpenWrtMonitor \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
