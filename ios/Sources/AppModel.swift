@@ -704,7 +704,7 @@ final class AppModel: ObservableObject {
         if items.contains(.sensors) {
             updateSensors(temp: sections["TEMP"] ?? "", fan: sections["FAN"] ?? "")
         }
-        if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "") }
+        if items.contains(.flash) { updateFlash(sections["FLASH"] ?? "", mtd: sections["MTD"] ?? "") }
         if items.contains(.devices) { updateDevices(sections["LEASES"] ?? "") }
         if items.contains(.clashState) {
             openClash = parseOpenClashInfo(sections, current: openClash)
@@ -1063,61 +1063,71 @@ final class AppModel: ObservableObject {
         stats.memoryUsed = total > available ? total - available : 0
     }
 
-    private func updateFlash(_ text: String) {
-        var total: UInt64 = 0
-        var system: UInt64 = 0
-        var app: UInt64 = 0
-        var available: UInt64 = 0
+    private func updateFlash(_ text: String, mtd: String = "") {
+        var romTotal: UInt64 = 0
+        var romUsed: UInt64 = 0
+        var fsTotal: UInt64 = 0
+        var fsUsed: UInt64 = 0
+        var fsAvail: UInt64 = 0
 
         for line in text.split(separator: "\n") {
             let fields = line.split(separator: " ").map(String.init)
-            guard fields.count >= 2 else { continue }
-            switch fields[0] {
-            case "SYS":
-                system = (UInt64(fields[1]) ?? 0) * 1024
-            case "TOTAL" where fields.count >= 6:
-                total = (UInt64(fields[1]) ?? 0) * 1024
-                app = (UInt64(fields[3]) ?? 0) * 1024
-                available = (UInt64(fields[5]) ?? 0) * 1024
+            switch fields.first ?? "" {
+            case "ROM" where fields.count >= 3:
+                romTotal = (UInt64(fields[1]) ?? 0) * 1024
+                romUsed = (UInt64(fields[2]) ?? 0) * 1024
             case "ROOT" where fields.count >= 4:
-                total = (UInt64(fields[1]) ?? 0) * 1024
-                app = (UInt64(fields[2]) ?? 0) * 1024
-                available = (UInt64(fields[3]) ?? 0) * 1024
+                fsTotal = (UInt64(fields[1]) ?? 0) * 1024
+                fsUsed = (UInt64(fields[2]) ?? 0) * 1024
+                fsAvail = (UInt64(fields[3]) ?? 0) * 1024
             default:
                 break
             }
         }
 
-        guard total > 0 else { return }
-        if system == 0 {
-            let remainder = app &+ available
-            system = total > remainder ? total - remainder : 0
-        }
-        if app == 0 {
-            let remainder = system &+ available
-            app = total > remainder ? total - remainder : 0
-        }
-        if available == 0 {
-            let remainder = system &+ app
-            available = total > remainder ? total - remainder : 0
+        // 没有 overlay 的纯只读系统（个别固件）：df / 和 df /rom 报的是同一个 squashfs，
+        // 直接相加会把固件算两遍，这里认出来就只保留一份。
+        if fsTotal > 0, fsTotal == romTotal, fsUsed == romUsed {
+            fsUsed = 0
+            fsAvail = 0
         }
 
-        // 让「系统 + 应用 + 可用」自己成为总量。
-        //
-        // OpenWrt 上 /rom 是只读 squashfs（df 的 Used 就是整块固件），/overlay 是另一块
-        // 分区、各报各的总量。之前拿 /overlay 的 1K-blocks 当 total，再把它和 /rom 的
-        // 用量相加，就会算成「已用 30 MB、剩余 90 MB、共 100 MB」——已用加剩余超过总量，
-        // 进度条（三段各自归一）也就和右上角的百分比对不上。三段同源，用它们的和做分母，
-        // 三个数字和条就永远一致。
-        let sum = system &+ app &+ available
-        if sum > 0 { total = sum }
+        // 旧版这里 df 的是 /rom /overlay /，再用「squashfs 用量 + overlay 总量」
+        // 当总容量；而 squashfs 的 Size 是镜像本身、overlay 的 Size 又是另一个分区，
+        // 两者相加会超过实际闪存（常见 512 MB 的机器读出 560 MB）。
+        // 现在总容量直接取 /proc/mtd 各分区 size 之和，那是物理闪存的真实划分。
+        let used = romUsed &+ fsUsed
+        var capacity = mtdCapacity(mtd)
+        if capacity == 0 {
+            // 没有 /proc/mtd（eMMC + GPT 之类的机型）：退回两个分区的总量之和。
+            capacity = romTotal &+ max(fsTotal, fsUsed &+ fsAvail)
+        }
+        // 读到明显偏小（extroot 把 overlay 挪到 U 盘、或者只读到了部分分区）时，
+        // 用「已用 + 剩余」兜底，宁可少算一点也不能出现已用超过总量。
+        if capacity < used &+ fsAvail {
+            capacity = used &+ fsAvail
+        }
+        guard capacity > 0 else { return }
 
         flashInfo = FlashInfo(
-            total: total,
-            systemUsed: system,
-            appUsed: app,
-            available: available
+            total: capacity,
+            systemUsed: romUsed,
+            appUsed: fsUsed,
+            available: capacity > used ? capacity - used : 0
         )
+    }
+
+    /// /proc/mtd 每行形如 `mtd3: 1d000000 00020000 "ubi"`，第二列就是分区字节数（十六进制）。
+    /// 各分区首尾相连铺满整块闪存，所以求和就是闪存总容量。
+    private func mtdCapacity(_ text: String) -> UInt64 {
+        var total: UInt64 = 0
+        for line in text.split(separator: "\n") {
+            let fields = line.split(separator: " ").map(String.init)
+            guard fields.count >= 2, fields[0].hasSuffix(":") else { continue }
+            guard let size = UInt64(fields[1], radix: 16) else { continue }
+            total &+= size
+        }
+        return total
     }
 
     private func updateNetwork(_ text: String) {
@@ -1451,9 +1461,16 @@ private extension AppModel {
 
             """
         case .flash:
+            // /rom 是只读 squashfs（df 的 Used 就是整块固件），/ 是 overlayfs
+            // （等于可写分区）。两个加起来才是「真正占掉的闪存」。
+            // 总容量不再靠自己加，改成读 /proc/mtd 里各分区的 size 求和——
+            // 那是内核对闪存分区的真实划分，比 df 的推算靠谱。
             return """
             echo @@FLASH
-            df -k /rom /overlay / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "SYS",$3; else if($NF=="/overlay")print "TOTAL",$2,"APP",$3,"AVAIL",$4; else if($NF=="/")print "ROOT",$2,$3,$4}'
+            df -k /rom / 2>/dev/null | awk 'NR>1{if($NF=="/rom")print "ROM",$2,$3; else if($NF=="/")print "ROOT",$2,$3,$4}'
+            echo @@MTD
+            cat /proc/mtd 2>/dev/null
+            true
 
             """
         case .devices:

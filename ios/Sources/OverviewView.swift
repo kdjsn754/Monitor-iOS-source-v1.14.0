@@ -254,16 +254,18 @@ struct OverviewView: View {
                 badge: temperatureBadge
             )
             hardwareTile(
-                icon: fanIcon,
+                // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
+                icon: "fanblades",
                 title: "风扇",
                 value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
                 color: fanTone,
-                badge: fanBadge
+                badge: fanBadge,
+                spin: model.stats.fanRPM
             )
         }
     }
 
-    // 图标跟着读数走：温度计低/中/高三档，风扇叶轮从细到实心、颜色由青转橙，
+    // 图标跟着读数走：温度计低/中/高三档，风扇叶轮越转越快、颜色由青转橙，
     // 一眼能看出「凉/热」「慢/快」，不用先读数字。
 
     private var temperatureIcon: String {
@@ -287,15 +289,6 @@ struct OverviewView: View {
         return nil
     }
 
-    /// 风扇图标跟着转速换：静止/低速是细叶轮，中速换成实心叶轮，高速干脆换成风线，
-    /// 配合下面的「低速 / 中速 / 高速」小标签，扫一眼就知道转得多厉害。
-    private var fanIcon: String {
-        guard let rpm = model.stats.fanRPM, rpm > 0 else { return "fanblades" }
-        if rpm >= 2400 { return "wind" }
-        if rpm >= 1200 { return "fanblades.fill" }
-        return "fanblades"
-    }
-
     private var fanTone: Color {
         guard let rpm = model.stats.fanRPM, rpm > 0 else { return Color(.systemGray) }
         if rpm >= 2400 { return .orange }
@@ -312,15 +305,21 @@ struct OverviewView: View {
     }
 
     private func hardwareTile(icon: String, title: String, value: String,
-                              color: Color, badge: String? = nil) -> some View {
+                              color: Color, badge: String? = nil,
+                              spin: Double? = nil) -> some View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(color.opacity(0.12))
                     .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(color)
+
+                if let rpm = spin, rpm > 0 {
+                    FanBlades(rpm: rpm, color: color, size: 18)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(color)
+                }
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -347,49 +346,95 @@ struct OverviewView: View {
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// 连接设备：左边一律「头像 + 名字 / IP」两行，右边不再放任何数字，
+    /// 所有文字共用同一条左边界。旧版是「名字左、IP 右」两端对齐，
+    /// 设备名长短不一，右侧 IP 就被顶得忽左忽右，看起来整块都是歪的。
     private var devicesContent: some View {
-        VStack(spacing: 8) {
-            HStack {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text("\(model.devices.count)")
-                    .font(.title.bold())
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(.blue)
-                Text("台设备")
+                Text("台设备在线")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
-                Text("仅 DHCP 租约")
+                Spacer(minLength: 8)
+                Text("DHCP 租约")
                     .font(.caption2)
+                    .foregroundStyle(Color(.tertiaryLabel))
+            }
+            .padding(.bottom, 8)
+
+            if model.devices.isEmpty {
+                Text("还没读到 DHCP 租约，下一轮刷新再看")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            // 用 IP 当标识：DeviceInfo 每轮都重建，UUID 每次都变，会让这几行每 2 秒整体换新。
-            ForEach(Array(model.devices.prefix(4).enumerated()), id: \.element.ip) { _, device in
-                HStack {
-                    Text(model.displayName(for: device))
-                        .font(.caption)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(device.ip)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            } else {
+                // 用 IP 当标识：DeviceInfo 每轮都重建，UUID 每次都变，
+                // 会让这几行每 2 秒被整体重建一次。
+                ForEach(Array(model.devices.prefix(4).enumerated()), id: \.element.ip) { index, device in
+                    if index > 0 {
+                        Divider().opacity(0.6).padding(.leading, 38)
+                    }
+                    deviceRow(device)
                 }
-            }
-            if !model.devices.isEmpty {
+
+                Divider().opacity(0.6).padding(.top, 2)
+
                 Button {
                     showAllDevices = true
                 } label: {
-                    HStack(spacing: 3) {
-                        Text("查看全部设备")
+                    HStack(spacing: 4) {
+                        Text(model.devices.count > 4
+                             ? "查看全部 \(model.devices.count) 台设备"
+                             : "查看全部设备")
+                        Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                     }
-                    .font(.caption)
+                    .font(.footnote.weight(.medium))
                     .foregroundStyle(.blue)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// 一行设备：30pt 圆底首字母 + 名字 / IP。行高固定，四行高度不会因为
+    /// 名字里有没有中文、有没有改名而参差。
+    private func deviceRow(_ device: DeviceInfo) -> some View {
+        HStack(spacing: 8) {
+            Text(initial(of: device))
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.blue)
+                .frame(width: 30, height: 30)
+                .background(Color.blue.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.displayName(for: device))
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(device.ip)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 6)
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+    }
+
+    private func initial(of device: DeviceInfo) -> String {
+        let name = model.displayName(for: device)
+        guard let first = name.first, first.isLetter || first.isNumber else { return "?" }
+        return String(first).uppercased()
     }
 
     private var systemContent: some View {
@@ -499,13 +544,24 @@ private struct ResourceRingCard: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundStyle(accent)
+            HStack(spacing: 7) {
+                // 和「硬件状态」同一个做法：淡色圆角底 + 系统图标，
+                // 不再是裸图标贴在标题前面（那样一眼看过去像两个字母飘着）。
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(accent.opacity(0.12))
+                        .frame(width: 26, height: 26)
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(accent)
+                }
+
                 Text(title)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
                 Spacer(minLength: 4)
+
                 Text(topRight)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -563,6 +619,56 @@ private struct RingGauge: View {
             }
         }
         .frame(width: diameter, height: diameter)
+    }
+}
+
+/// 会转的风扇叶轮：转速越高转得越快，停转时静止。
+///
+/// 用「重复的旋转动画」而不是按帧重绘：动画由渲染进程（Core Animation）执行，
+/// App 不会为此每秒重画一次界面——概览页本来就是靠降低重绘量压 CPU 的。
+/// 时长只分四档，档位变了才用 .id 重建转子、从 0 度重新起转，
+/// 避免「改了时长但旧动画还在跑」导致的忽快忽慢。
+private struct FanBlades: View {
+    let rpm: Double
+    let color: Color
+    var size: CGFloat = 18
+
+    /// 一圈用多久：600 RPM 转一圈 1.5 秒，2400 往上接近 0.4 秒一圈。
+    private var period: Double {
+        switch rpm {
+        case ..<900: return 1.5
+        case ..<1600: return 0.95
+        case ..<2400: return 0.62
+        default: return 0.42
+        }
+    }
+
+    var body: some View {
+        Rotor(period: period, color: color, size: size)
+            .id(period)
+    }
+}
+
+private struct Rotor: View {
+    let period: Double
+    let color: Color
+    let size: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Image(systemName: "fanblades.fill")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(color)
+            .rotationEffect(.degrees(angle))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.linear(duration: period).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 

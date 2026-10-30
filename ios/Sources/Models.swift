@@ -155,10 +155,10 @@ struct FlashInfo {
 
     var hasData: Bool { total > 0 }
 
-    /// 三段共用同一个分母（total 由 系统 + 应用 + 可用 三者在解析时凑齐），
-    /// 所以「已用 + 剩余 = 共」永远成立，进度条填到哪儿和右上角的百分比是同一个数。
-    /// 旧版把三段各自归一，结果出现「已用 30 MB、剩余 90 MB、共 100 MB」这种
-    /// 加起来超过总容量的组合，条的填充比例也和百分比对不上。
+    /// total 取自 /proc/mtd 各分区之和（物理闪存的真实大小），
+    /// 所以「已用 + 剩余 = 共」恒成立，圆环填到哪儿和百分比也是同一个数。
+    /// systemUsed 是只读固件（squashfs）的大小，appUsed 是可写分区（overlayfs）已用，
+    /// 两者相加才是真正被占掉的闪存。
     var usedBytes: UInt64 {
         guard total > 0 else { return 0 }
         return min(total, systemUsed &+ appUsed)
