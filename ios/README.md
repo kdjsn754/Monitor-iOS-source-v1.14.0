@@ -2,6 +2,21 @@
 
 Android 版的 iOS 原生 SwiftUI 移植。
 
+## v1.28.0 — 硬件状态上下对调、设备列表小字分列、关于页给兼容窗口留证
+
+- **硬件状态上下对调**：`hardwareContent` 第一排改成 `HardwareGauge`（CPU / 内存圆环），
+  第二排 `hardwareTile`（温度 / 风扇）。圆环是这组里读数最重的两块，先出现；
+  温度和风扇属于「环境量」，压成一排小格子。
+- **设备列表小字拆成两列**：`DeviceListView` 原来的 `\(ip) · \(mac)` 是一条字符串，
+  IP 位数一变，中间的点和后面整段 MAC 就跟着左右挪。现在拆成
+  「IP（`minWidth: 88` 固定列）+ 点 + MAC」三格等宽字，每行的点和 MAC 都从同一个 x 起步；
+  名字与小字的行距统一成 3pt。
+- **关于页版本号改读 Bundle**（`1.28.0 (41)`），不再手抄一份；
+  另外只在**真的跑在兼容窗口里**时补一行「显示适配 未铺满」+ 逻辑尺寸 / 物理尺寸 / `DTSDKName`，
+  平时不出现——黑边到底卡在哪个 SDK，从此有现场证据。
+- **codemagic 打包步骤打印 `DTSDKName` / `UILaunchScreen`**，和 GitHub Actions 对齐。
+- 版本 1.28.0 / build 41。
+
 ## v1.27.0 — CPU/内存并入硬件状态、设备卡只看概括、闪存总量回归
 
 - **CPU 与内存并进「硬件状态」**：删掉独立的 `resources` 模块与 `ResourceRingCard`，

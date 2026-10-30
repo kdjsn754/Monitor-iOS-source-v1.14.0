@@ -217,30 +217,13 @@ struct OverviewView: View {
         return .blue
     }
 
-    /// 硬件状态的「两块」：上一排是温度和风扇的读数格，
-    /// 下一排是 CPU 和内存的圆环——CPU / 内存本来就是同一块板子上的硬件，
+    /// 硬件状态的「两块」：上一排是 CPU 和内存的圆环，
+    /// 下一排是温度和风扇的读数格——CPU / 内存本来就是同一块板子上的硬件，
     /// 分成两张卡反而要多一次标题和一圈留白。
+    /// 圆环放上面：它是这组里读数最重的两块，第一眼先看到占用率；
+    /// 温度和风扇更像「环境量」，压在一排小格子里刚好。
     private var hardwareContent: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                hardwareTile(
-                    icon: temperatureIcon,
-                    title: "温度",
-                    value: model.stats.temperature.map { String(format: "%.1f °C", $0) } ?? "无传感器",
-                    color: temperatureTone,
-                    badge: temperatureBadge
-                )
-                hardwareTile(
-                    // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
-                    icon: "fanblades",
-                    title: "风扇",
-                    value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
-                    color: fanTone,
-                    badge: fanBadge,
-                    spin: model.stats.fanRPM
-                )
-            }
-
             HStack(spacing: 12) {
                 HardwareGauge(
                     title: "CPU",
@@ -263,6 +246,25 @@ struct OverviewView: View {
                     percent: model.memoryFraction * 100,
                     note: "可用 \(formatBytes(Double(max(0, model.stats.memoryTotal - model.stats.memoryUsed))))",
                     detail: "\(formatBytes(Double(model.stats.memoryUsed))) / \(formatBytes(Double(model.stats.memoryTotal)))"
+                )
+            }
+
+            HStack(spacing: 12) {
+                hardwareTile(
+                    icon: temperatureIcon,
+                    title: "温度",
+                    value: model.stats.temperature.map { String(format: "%.1f °C", $0) } ?? "无传感器",
+                    color: temperatureTone,
+                    badge: temperatureBadge
+                )
+                hardwareTile(
+                    // 停转时用静态叶轮；转起来由 spin 换成会转的叶轮（见 FanBlades）。
+                    icon: "fanblades",
+                    title: "风扇",
+                    value: model.stats.fanRPM.map { String(format: "%.0f RPM", $0) } ?? "无传感器",
+                    color: fanTone,
+                    badge: fanBadge,
+                    spin: model.stats.fanRPM
                 )
             }
         }

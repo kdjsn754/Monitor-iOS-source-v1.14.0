@@ -129,18 +129,27 @@ struct DeviceListView: View {
                     .frame(width: 34, height: 34)
                     .background(Color.blue.opacity(0.12), in: Circle())
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(name)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text("\(device.ip) · \(device.mac.uppercased())")
-                        .font(.system(size: 11).monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    // IP 和 MAC 拆成两列：IP 给一个固定宽度（13 个等宽字符放得下），
+                    // 后面那个「·」和 MAC 因此每行都从同一个 x 起步。
+                    // 原来是一整串「IP · MAC」，IP 少一位整行就往左缩一格，
+                    // 四行下来中间那个点参差不齐，看着就像没对齐。
+                    HStack(spacing: 6) {
+                        Text(device.ip)
+                            .frame(minWidth: 88, alignment: .leading)
+                        Text("·")
+                        Text(device.mac.uppercased())
+                    }
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 8)
 

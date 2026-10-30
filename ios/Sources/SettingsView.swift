@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 设置页：顶部一张「路由器」卡把当前连接、切换、新建、编辑、网页后台全收进去，
 /// 采集频率只留一行摘要，细项进二级页。
@@ -373,17 +374,58 @@ struct SettingsView: View {
 
     // MARK: - 关于
 
-    /// 只留两行：版本 + 连接方式。
-    /// 屏幕尺寸、运行模式、构建 SDK 那几行是排查黑边时临时加的诊断信息，
-    /// 黑边已经定为打包 SDK 的问题，界面上不再占地方。
+    /// 平时只留两行：版本 + 连接方式。
+    /// 只有真的跑在「兼容窗口」里（系统按旧尺寸排版、四周留黑边）时，
+    /// 才临时多出一行说明——不然用户只能看到黑边，却不知道是打包 SDK 的问题。
     private var aboutCard: some View {
         SectionCard("关于", icon: "info.circle") {
             VStack(spacing: 10) {
-                infoRow("版本", "1.27.0")
+                infoRow("版本", appVersion)
                 Divider().opacity(0.5)
                 infoRow("连接方式", "SSH 直连")
+                if let note = compatWindowNote {
+                    Divider().opacity(0.5)
+                    VStack(alignment: .leading, spacing: 4) {
+                        infoRow("显示适配", "未铺满", color: .orange)
+                        Text(note)
+                            .font(.caption2)
+                            .foregroundStyle(Color(.tertiaryLabel))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("系统按打包用的 SDK 决定窗口档位，用 Xcode 27（iOS 27 SDK）重新打包即可铺满。")
+                            .font(.caption2)
+                            .foregroundStyle(Color(.tertiaryLabel))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
         }
+    }
+
+    /// 版本号从包里读，别在界面上再抄一份——抄的那份早晚和工程文件对不上。
+    private var appVersion: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return build.map { "\(short) (\($0))" } ?? short
+    }
+
+    /// 兼容窗口的判断：逻辑尺寸比「原生像素 ÷ 缩放」小一圈，就是被系统塞进旧尺寸窗口了。
+    /// 这时屏幕上下（个别机型还有左右）会留黑边，App 自己铺不出去。
+    private var compatWindowNote: String? {
+        guard let screen = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.screen else { return nil }
+        let native = screen.nativeBounds.size
+        let physical = CGSize(width: native.width / screen.nativeScale,
+                              height: native.height / screen.nativeScale)
+        let logical = screen.bounds.size
+        guard physical.width - logical.width > 1 || physical.height - logical.height > 1 else {
+            return nil
+        }
+        let sdk = (Bundle.main.object(forInfoDictionaryKey: "DTSDKName") as? String) ?? "未知 SDK"
+        return String(
+            format: "界面按 %.0f×%.0f 排版，屏幕是 %.0f×%.0f · 打包 %@",
+            logical.width, logical.height, physical.width, physical.height, sdk
+        )
     }
 
     private func infoRow(_ title: String, _ value: String,
