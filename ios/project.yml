@@ -14,7 +14,11 @@ targets:
     type: application
     platform: iOS
     sources:
+      # Info.plist 由下面的 info: 生成并作为 INFOPLIST_FILE 使用，
+      # 不能再当资源复制一遍，否则会报「Multiple commands produce …/Info.plist」。
       - path: Sources
+        excludes:
+          - Info.plist
     dependencies:
       - package: SSH2
     info:
@@ -37,6 +41,14 @@ targets:
           UIApplicationSupportsMultipleScenes: false
     settings:
       base:
+        # ⚠️ 必须显式写 PRODUCT_NAME：XcodeGen 不写这一项时，Xcode 会拿默认的
+        # $(TARGET_NAME) 去解析，一旦解析成空串，归档产物就变成 Applications/.app，
+        # 于是「建目录」和「链接」两条命令抢同一个输出，报
+        # error: Multiple commands produce '.../Applications/.app'（2026-10-30 实际踩过）。
+        PRODUCT_NAME: OpenWrtMonitor
+        # Swift 模块名跟着 PRODUCT_NAME 走，显式写出来，避免以后改显示名时把
+        # 模块名带歪（改了模块名，所有源文件都不需要动，但 import 会变）。
+        PRODUCT_MODULE_NAME: OpenWrtMonitor
         PRODUCT_BUNDLE_IDENTIFIER: com.catmint.openwrtmonitor
         MARKETING_VERSION: 1.28.0
         CURRENT_PROJECT_VERSION: 41
@@ -47,6 +59,9 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         DEVELOPMENT_TEAM: ""
         TARGETED_DEVICE_FAMILY: "1"
+        # 新版构建系统已经不支持老式 headermap，这里显式关掉，避免那条
+        # "Traditional headermap style is no longer supported" 警告。
+        ALWAYS_SEARCH_USER_PATHS: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
 schemes:

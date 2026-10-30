@@ -26,10 +26,10 @@ fi
 # 低于 26 直接停；26 到 27 之间只警告（能出包，但黑边可能还在）。
 SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo 0)"
 SDK_MAJOR="${SDK_VERSION%%.*}"
-echo "==> iphoneos SDK: $SDK_VERSION（$(xcodebuild -version | head -n 1)）"
+echo "==> iphoneos SDK: ${SDK_VERSION}（$(xcodebuild -version | head -n 1)）"
 if [ "${SDK_MAJOR:-0}" -lt 26 ]; then
   cat <<EOS
-当前 Xcode 的 iOS SDK 是 $SDK_VERSION，低于 26。
+当前 Xcode 的 iOS SDK 是 ${SDK_VERSION}，低于 26。
 用它打出来的包在新机型上会被系统按兼容模式运行（上下有黑边）。
 请换用 Xcode 26 及以上版本（sudo xcode-select -s /Applications/Xcode.app），或改用
 GitHub Actions 里的 macos-26 产物。
@@ -38,7 +38,7 @@ EOS
 fi
 if [ "${SDK_MAJOR:-0}" -lt 27 ]; then
   cat <<EOS
-注意：SDK 是 $SDK_VERSION，低于 27。系统会按「默认兼容」档运行，界面缩在旧尺寸窗口里，
+注意：SDK 是 ${SDK_VERSION}，低于 27。系统会按「默认兼容」档运行，界面缩在旧尺寸窗口里，
 上下仍会留一条黑边。想彻底铺满，请在装有 Xcode 27（iOS 27 SDK）的机器上重新打包。
 EOS
 fi
@@ -65,7 +65,7 @@ xcodebuild archive \
 
 APP="build/OpenWrtMonitor.xcarchive/Products/Applications/OpenWrtMonitor.app"
 if [ ! -d "$APP" ]; then
-  echo "归档完成但没找到 $APP，检查 project.yml 的 target 名是不是 OpenWrtMonitor" >&2
+  echo "归档完成但没找到 ${APP}，检查 project.yml 的 target 名是不是 OpenWrtMonitor" >&2
   exit 1
 fi
 

@@ -349,12 +349,25 @@ jobs:
           # 归档产物会变成 Applications/.app 并报「Multiple commands produce」。
           # 这里不依赖那个文件，直接把它补进生成的工程：锚点是 target 里的
           # PRODUCT_BUNDLE_IDENTIFIER，位置稳定。
-          if grep -q 'PRODUCT_NAME' "$pbx"; then
-            echo "工程里已有 PRODUCT_NAME：$(grep -m1 -o 'PRODUCT_NAME = [^;]*' "$pbx")"
-          else
+          #
+          # 注意：只能写进**工程**。在 xcodebuild 命令行上写 PRODUCT_NAME=xxx 是全局覆盖，
+          # 会连带把依赖包里的 OpenSSL / SSH2 也改名，反而制造出新的 Multiple commands produce。
+          if grep -q 'PRODUCT_NAME = "";' "$pbx"; then
+            echo "::warning::工程里的 PRODUCT_NAME 是空串，改成 OpenWrtMonitor"
+            perl -pi -e 's/PRODUCT_NAME = "";/PRODUCT_NAME = OpenWrtMonitor;/g' "$pbx"
+          fi
+          # 对每个「还没紧跟 PRODUCT_NAME」的 bundle id 行补一行，
+          # Debug / Release 两个配置各补一次，已经有的不重复插。
+          if ! grep -q 'PRODUCT_NAME = OpenWrtMonitor;' "$pbx"; then
             echo "::warning::生成出来的工程里没有 PRODUCT_NAME（仓库的 ios/project.yml 可能是旧版），这里自动补上"
-            perl -0pi -e 's/(\n(\s*)PRODUCT_BUNDLE_IDENTIFIER = com\.catmint\.openwrtmonitor;)/$1\n$2PRODUCT_NAME = OpenWrtMonitor;/g' "$pbx"
-            grep -m3 -o 'PRODUCT_NAME = [^;]*' "$pbx" || true
+          fi
+          perl -0pi -e 's/(\n(\s*)PRODUCT_BUNDLE_IDENTIFIER = com\.catmint\.openwrtmonitor;)(?!\n\s*PRODUCT_NAME)/$1\n$2PRODUCT_NAME = OpenWrtMonitor;/g' "$pbx"
+          pname_hits="$(grep -c 'PRODUCT_NAME = OpenWrtMonitor;' "$pbx" || true)"
+          echo "工程里 PRODUCT_NAME = OpenWrtMonitor 出现 ${pname_hits} 处"
+          if [ "${pname_hits:-0}" -eq 0 ]; then
+            echo "::error::没能把 PRODUCT_NAME 写进工程（锚点没命中）。请确认 ios/project.yml 的 settings.base 里有 PRODUCT_NAME: OpenWrtMonitor 和 PRODUCT_BUNDLE_IDENTIFIER: com.catmint.openwrtmonitor。"
+            grep -m5 -n 'PRODUCT_BUNDLE_IDENTIFIER' "$pbx" || true
+            exit 1
           fi
 
           # ── 自愈：Info.plist 别同时当资源 ──────────────────────────────
@@ -395,6 +408,12 @@ jobs:
       # 放到 .../Applications/.app，然后报一句很难懂的
       # "error: Multiple commands produce '.../Applications/.app'"（2026-10-30 踩过）。
       # 这里提前把它打印出来并硬性拦住，报错信息直接指向真实原因。
+      #
+      # ⚠️ 绝对不要在 xcodebuild 命令行上写 PRODUCT_NAME=xxx。
+      # 命令行设置是**全局覆盖**，会作用到依赖图里的每一个 target，包括本地 SPM 包里的
+      # OpenSSL / COpenSSL / SSH2 / CSSH2。那样它们全都会去产出同一个 OpenWrtMonitor.o，
+      # 于是报 error: Multiple commands produce '.../UninstalledProducts/iphoneos/OpenWrtMonitor.o'
+      # （2026-10-30 第二轮归档失败就是自己踩的）。产物名只能写进工程（target 级）。
       - name: 检查产物名（PRODUCT_NAME）
         working-directory: ${{ env.IOS_DIR }}
         timeout-minutes: 8
@@ -404,24 +423,16 @@ jobs:
                   -configuration Release -sdk iphoneos \
                   -destination generic/platform=iOS"
           # shellcheck disable=SC2086
-          raw="$(perl -e 'alarm shift; exec @ARGV' 420 \
-            xcodebuild -showBuildSettings $common 2>/dev/null || true)"
-          echo "--- 工程原样的关键设置 ---"
-          echo "$raw" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
-
-          # 归档命令会带 PRODUCT_NAME=OpenWrtMonitor 这个覆盖值，所以这里也带上，
-          # 校验的才是「真正会被用来归档」的那份设置。
-          # shellcheck disable=SC2086
           out="$(perl -e 'alarm shift; exec @ARGV' 420 \
-            xcodebuild -showBuildSettings $common PRODUCT_NAME=OpenWrtMonitor 2>/dev/null || true)"
-          echo "--- 加上归档时的覆盖值之后 ---"
-          echo "$out" | grep -E '^ *(PRODUCT_NAME|EXECUTABLE_NAME) = ' || echo "（一条都没取到）"
+            xcodebuild -showBuildSettings $common 2>/dev/null || true)"
+          echo "--- 工程里的关键设置 ---"
+          echo "$out" | grep -E '^ *(PRODUCT_NAME|PRODUCT_MODULE_NAME|EXECUTABLE_NAME|TARGET_NAME|INFOPLIST_FILE|PRODUCT_BUNDLE_IDENTIFIER) = ' || echo "（一条都没取到）"
           pname="$(echo "$out" | awk -F' = ' '/^ *PRODUCT_NAME = /{print $2; exit}' | tr -d '[:space:]')"
           if [ -z "$pname" ]; then
-            echo "::error::连 PRODUCT_NAME=OpenWrtMonitor 这个命令行覆盖都没生效，工程文件可能已损坏。请把生成的 ios/OpenWrtMonitor.xcodeproj 删掉重跑，或检查 project.yml。"
+            echo "::error::工程里的 PRODUCT_NAME 还是空的。上面「生成 Xcode 工程」那步的自愈应该补上它；若补了仍为空，说明 project.pbxproj 的结构变了，需要检查 ios/project.yml 的 settings.base。"
             exit 1
           fi
-          echo "PRODUCT_NAME = ${pname}（归档时会用它，正常）"
+          echo "PRODUCT_NAME = ${pname}（正常，归档会用它）"
 
       - name: 构建（不签名）
         working-directory: ${{ env.IOS_DIR }}
@@ -440,7 +451,6 @@ jobs:
             -clonedSourcePackagesDirPath build/spm \
             -resultBundlePath build/OpenWrtMonitor.xcresult \
             -quiet \
-            PRODUCT_NAME=OpenWrtMonitor \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \

@@ -15,6 +15,35 @@ Android 版的 iOS 原生 SwiftUI 移植。
   另外只在**真的跑在兼容窗口里**时补一行「显示适配 未铺满」+ 逻辑尺寸 / 物理尺寸 / `DTSDKName`，
   平时不出现——黑边到底卡在哪个 SDK，从此有现场证据。
 - **codemagic 打包步骤打印 `DTSDKName` / `UILaunchScreen`**，和 GitHub Actions 对齐。
+- **GitHub Actions 的运行器标签是 `xcode-27`，不是 `macos-27`**：GitHub 的 macOS 镜像从
+  Xcode 26 起改成按工具链命名，Xcode 27 镜像的 label 只有 `xcode-27` / `xcode-27-xlarge`
+  （arm64 专用，2026-10-15 起 GA，基于 macOS 27，默认 Xcode 27.0）。
+  workflow 的 `auto` 改成排 `xcode-27`；误填 `macos-27` 会自动纠正并打一条 warning。
+  镜像里同时有 27.0 / 27.1 RC / 27.2 beta，原来「只比主版本」的脚本会一直停在 27.0
+  （那一档只是过渡适配），改成按「主版本.次版本」打分（同版本非 beta 优先）；SDK 恰好是
+  27.0 时构建摘要里会提示 27.1 起才完全铺满。
+- **修掉构建卡在「环境信息」**：第一次在 xcode-27 上跑，作业领到机器、checkout 完成后就
+  一动不动（4m47s 无输出）。根因是那一步直接调 `xcodebuild -version` / `xcrun --show-sdk-version`
+  ——全新镜像上首次启动 xcodebuild 要初始化组件、校验 Xcode.app，非交互下既不提示也不打印，
+  能空转十几分钟。现在「环境信息」纯读 `Contents/version.plist` 与 `SDKSettings.plist`；
+  会卡的 `xcodebuild` 挪到选完 Xcode 之后，先 `-license accept` + `-runFirstLaunch`，
+  每个调用套 `perl -e 'alarm ...'` 上限；每一步都写死 `timeout-minutes`。
+- **再修 `app?: unbound variable`**：macOS 运行器的 `/bin/bash` 是 3.2，不做 UTF-8 处理，
+  `$app（` 会把「（」的首字节算进变量名，配上 `set -u` 直接退出。工作流里 8 处、
+  `build-unsigned-ipa.sh` 里 4 处「变量紧挨中文/全角标点」全部改成 `${var}`。
+- **修归档失败 `Multiple commands produce '…/Applications/.app'`**：产物名是 `.app`，
+  说明 `PRODUCT_NAME` 是空串。`project.yml` 里显式写 `PRODUCT_NAME` /
+  `PRODUCT_MODULE_NAME`；`Sources/Info.plist` 从编译源里 `excludes` 掉（它是 `info:`
+  生成的 `INFOPLIST_FILE`，再当资源复制就会撞车）。工作流新增「检查产物名」步骤。
+  另外「生成 Xcode 工程」之后会自愈：pbxproj 里缺 `PRODUCT_NAME` 就按
+  `PRODUCT_BUNDLE_IDENTIFIER` 那行补（Debug/Release 各一次，已有不重复插）；
+  `Info.plist in Resources` 的两条引用直接删掉。仓库里的 `project.yml` 是旧版也能出包。
+- **⚠️ 不要在 xcodebuild 命令行上写 `PRODUCT_NAME=…`**：命令行设置是全局覆盖，会作用到
+  依赖图里每个 target。本地包 `Packages/libssh2-apple` 的 `OpenSSL` / `COpenSSL` /
+  `SSH2` / `CSSH2` 会被一起改名，四个 target 抢着产出同一个 `OpenWrtMonitor.o`，报
+  `error: Multiple commands produce '…/UninstalledProducts/iphoneos/OpenWrtMonitor.o'`
+  （2026-10-30 实际踩过）。产物名只写进工程，工作流 / `codemagic.yaml` /
+  `build-unsigned-ipa.sh` 三处的命令行覆盖已全部删除。
 - 版本 1.28.0 / build 41。
 
 ## v1.27.0 — CPU/内存并入硬件状态、设备卡只看概括、闪存总量回归
