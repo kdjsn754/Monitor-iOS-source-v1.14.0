@@ -1,31 +1,297 @@
 name: Build unsigned iOS IPA
+
+# ── 排队问题的真实原因（2026-10）──────────────────────────────────────────────
+# 1. macos-14 于 2026-11-02 退役，GitHub 已在过渡期**削减它的容量**，还额外排了
+#    8 个 brownout（临时故意失败）窗口。继续用 macos-14 的作业会一直停在
+#    "Waiting for a runner to pick up this job"，直到超时——这正是本仓库之前的现象。
+#    受影响的标签：macos-14 / macos-14-large / macos-14-xlarge（全部不要再写）。
+#    官方推荐迁移到：macos-latest(=macos-26) / macos-15 / *-xlarge。
+# 2. 公开仓库的 macOS 分钟免费，所以排队与额度、付款方式无关，纯粹是机器容量。
+#    私有仓库的 macOS 分钟按 10 倍扣（Free 2000 分钟/月 ≈ 200 分钟 macOS），额度耗尽也会排队。
+#
+# 本 workflow 的对策：
+#   - 默认 auto 只排 xcode-27（macOS 27 + Xcode 27 / iOS 27 SDK）。以前是 macos-15 +
+#     macos-26 一起抢，命中率高，但旧 SDK 打出来的包在新机型上会黑边（见下），所以砍掉了。
+#   - 队列等待时间不计入失败：job 超时放宽到 150 分钟，真正的工作量由各 step 的
+#     timeout-minutes 卡住（装 XcodeGen 6 分钟、解析依赖 10 分钟、归档 20 分钟），
+#     不会出现"排了两小时被 30 分钟硬超时杀掉"。
+#   - concurrency 取消同一分支的重复触发，避免自己挤自己。
+#
+# ── 为什么 auto 不再带 macos-15（2026-10-29）────────────────────────────────
+#   macos-15 默认装的是 Xcode 16（iOS 18 SDK）。用低于 iOS 26 的 SDK 打出来的包，
+#   在 iPhone 17 / iOS 27 上会被系统按「兼容模式」运行：内容缩在中间，屏幕上下一条黑边。
+#   用户实测就是这个问题。所以 auto 只排 macos-26（Xcode 26），macos-15 只能手动选，
+#   并且构建前会硬性检查 SDK 版本，低于 26 直接失败。
+#
+# ── 2026-10-30 更正：26 也不够，要 27 ────────────────────────────────────────
+#   系统的「兼容窗口」是**按打包用的 SDK 版本**分档的，跟设备型号无关：
+#     iOS 26 及更早 SDK → 默认兼容：整个 App 缩进一个旧尺寸的窗口里居中显示，四周黑边；
+#     iOS 27 SDK        → 过渡适配：窗口能铺到屏幕边缘，只剩很细的边；
+#     iOS 27.1 SDK 及以上 → 完全适配：真正铺满。
+#   用户实测「27 系统 + 26 SDK」还有上下各 4px 黑边（1206×2622 的截图按 393×852 排版再放大，
+#   402/393 = 1.0229），正好对上「默认兼容」这一档。所以这里改成：
+#     - 优先选机器上最新的一版 Xcode（同主版本里按次版本比，且优先非 beta）；
+#     - SDK < 26 直接失败；26 ≤ SDK < 27 打成警告并写进构建摘要（能出货，但可能仍有黑边）；
+#       SDK 27.0 再提醒一次——它是「过渡适配」，27.1 起才完全铺满。
+#
+# ── 运行器标签：没有 macos-27，只有 xcode-27（2026-10-30）──────────────────
+#   GitHub 的 macOS 镜像自 Xcode 26 起改成「按工具链命名」，所以 Xcode 27 镜像的标签是
+#   xcode-27 / xcode-27-xlarge，不是 macos-27（后者根本不存在，写上只会一直排队到超时）。
+#   2026-10-15 起 xcode-27 已转正式可用（GA），基于 macOS 27，默认装了
+#   Xcode 27.0（另有 27.1 RC、27.2 beta），且**只有 arm64**，没有 Intel 版本。
+#   机器上的 Xcode 名字是 /Applications/Xcode_27.app 这种，下面的「挑最新 Xcode」照样能选中。
+
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "运行器（auto = xcode-27：macOS 27 + Xcode 27 / iOS 27 SDK，才没有上下黑边）"
+        type: choice
+        default: auto
+        options:
+          # GitHub 没有 macos-27 这个标签。Xcode 27 镜像是按工具链命名的：xcode-27。
+          - auto
+          - xcode-27       # macOS 27 + Xcode 27（iOS 27 SDK），2026-10-15 转正式可用
+          - macos-26       # Xcode 26 / iOS 26 SDK：能出包，但新机型上仍有黑边
+          - macos-15       # 旧 SDK，仅排查用
+          - macos-15-intel
+
 permissions:
   contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODEGEN_VERSION: "2.46.0"
+
 jobs:
+  # 单独一个几秒就起来的 Linux job 决定构建矩阵，出错时一眼能看出选的是哪个标签。
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: 选择运行器
+        id: pick
+        env:
+          CHOICE: ${{ inputs.runner || 'auto' }}
+        run: |
+          set -eu
+          case "$CHOICE" in
+            auto)
+              json='["xcode-27"]'
+              note="auto：xcode-27（macOS 27 + Xcode 27 / iOS 27 SDK，界面才真正铺满）"
+              ;;
+            macos-27*)
+              # 常见误会：GitHub 上并没有 macos-27 这个运行器标签。
+              # Xcode 27 的镜像按工具链命名，label 是 xcode-27（arm64 专用）。
+              echo "::warning::GitHub 没有 macos-27 标签，Xcode 27 镜像的标签是 xcode-27，已自动换成 xcode-27"
+              json='["xcode-27"]'
+              note="macos-27 → 已自动换成 xcode-27"
+              ;;
+            xcode-27*)
+              json='["xcode-27"]'
+              note="指定运行器：xcode-27（macOS 27 + Xcode 27）"
+              ;;
+            macos-14*)
+              echo "::warning::macos-14 系列将于 2026-11-02 退役且容量已被削减，自动改用 xcode-27"
+              json='["xcode-27"]'
+              note="macos-14 → 已自动换成 xcode-27"
+              ;;
+            macos-15|macos-26|macos-15-intel|macos-26-intel)
+              if [ "${CHOICE#macos-15}" != "$CHOICE" ]; then
+                echo "::warning::macos-15 是旧 SDK，打出来的包在新机型上会上下黑边，仅建议排查用"
+              fi
+              if [ "$CHOICE" = "macos-26" ] || [ "$CHOICE" = "macos-26-intel" ]; then
+                echo "::warning::macos-26 只有 iOS 26 SDK，系统仍按兼容窗口运行，上下会留黑边"
+              fi
+              json="[\"$CHOICE\"]"
+              note="指定运行器：$CHOICE"
+              ;;
+            *)
+              echo "::warning::未知运行器 '$CHOICE'，回退到 xcode-27"
+              json='["xcode-27"]'
+              note="未知输入，回退 xcode-27"
+              ;;
+          esac
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+          echo "本次构建目标：$note" >> "$GITHUB_STEP_SUMMARY"
+          echo "$note"
+
   build:
-    runs-on: macos-14
+    needs: plan
+    strategy:
+      # 一个池子排不上不影响另一个，谁先起来谁先出包
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    # 排队时间也算在 job 超时里，所以给足；真正的工时长由下面各 step 卡住
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
-      - name: Locate iOS project
+
+      - name: 环境信息
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "---"
+          echo "runner: ${RUNNER_NAME} / ${RUNNER_OS} / ${RUNNER_ARCH}"
+          echo "matrix label: ${{ matrix.runner }}"
+
+      # 机器上常常装了好几版 Xcode，xcode-select 指的却是最旧的那版。
+      # 打包用的 SDK 决定了 App 在新机型上是「铺满」还是「缩在兼容窗口里」，
+      # 所以这里显式挑版本号最高的一版，再把 SDK 版本打出来。
+      #
+      # xcode-27 镜像里同时装了 27.0（默认）、27.1 RC、27.2 beta，光比 major 会一直
+      # 停在第 27.0 那个（循环按字母序，第一个赢）。所以按「主版本.次版本」算分，
+      # 且优先非 beta：27.1 才对应「完全适配」那一档。
+      - name: 选择机器上最新的 Xcode
+        run: |
+          set -eu
+          pick() {
+            allow_beta="$1"
+            best=""
+            best_key=-1
+            for app in /Applications/Xcode*.app; do
+              [ -d "$app" ] || continue
+              name="$(basename "$app")"
+              case "$name" in
+                *beta*|*Beta*|*BETA*)
+                  [ "$allow_beta" = "1" ] || continue
+                  ;;
+              esac
+              v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+                    "$app/Contents/Info.plist" 2>/dev/null || echo 0)"
+              major="${v%%.*}"
+              rest="${v#*.}"
+              minor="${rest%%.*}"
+              key=$(( ${major:-0} * 1000 + ${minor:-0} ))
+              echo "发现 $app（$v，权重 $key）"
+              if [ "$key" -gt "$best_key" ]; then
+                best="$app"
+                best_key="$key"
+              fi
+            done
+            echo "$best"
+          }
+          best="$(pick 0)"
+          if [ -z "$best" ]; then
+            echo "::warning::没有非 beta 的 Xcode，退而用 beta"
+            best="$(pick 1)"
+          fi
+          if [ -n "$best" ]; then
+            sudo xcode-select -s "$best"
+            echo "已切到 $best"
+          else
+            echo "::warning::没在 /Applications 里找到 Xcode*.app，沿用 xcode-select 当前指向"
+          fi
+          xcodebuild -version
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      # 系统的「兼容窗口」按打包 SDK 分档：SDK ≤ 26 只给旧尺寸窗口（上下黑边），
+      # SDK 27 起铺到边缘（还剩很细的边），SDK 27.1 起才算真正铺满。
+      # 低于 26 直接失败；26 能出货但会警告。
+      - name: 检查 iOS SDK
+        run: |
+          set -eu
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          major="${sdk%%.*}"
+          rest="${sdk#*.}"
+          minor="${rest%%.*}"
+          echo "检测到 iphoneos SDK: $sdk"
+          if [ "$major" -lt 26 ]; then
+            echo "::error::当前 iOS SDK 是 $sdk（低于 26）。用它打出来的包在新机型上会被系统按兼容模式运行，屏幕上下有黑边。请改用 xcode-27 运行器（macOS 27 + Xcode 27）。"
+            exit 1
+          fi
+          if [ "$major" -lt 27 ]; then
+            echo "::warning::iOS SDK 是 $sdk（低于 27）。系统会按「默认兼容」档运行：整个界面缩在一个旧尺寸窗口里，上下仍有黑边。把运行器换成 xcode-27 才能真正铺满。"
+            {
+              echo ""
+              echo "> ⚠️ 本次打包用的是 iOS $sdk SDK（< 27）：系统会把界面放进旧尺寸兼容窗口，上下仍会留黑边。"
+              echo "> 想彻底去掉黑边，请把运行器换成 **xcode-27**（macOS 27 + Xcode 27）重新打包。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$minor" -lt 1 ]; then
+            echo "::warning::iOS SDK 是 $sdk（27.0）。这一档是「过渡适配」：窗口已经铺到屏幕边缘，但偶尔还能看到一条极细的边；27.1 起才算完全铺满。"
+          else
+            echo "SDK 版本满足要求（$sdk ≥ 27.1），界面可以完全铺满屏幕"
+          fi
+
+      - name: 定位 iOS 工程
         run: |
           if [ -f ios/project.yml ]; then
             echo "IOS_DIR=ios" >> "$GITHUB_ENV"
           elif [ -f project.yml ]; then
             echo "IOS_DIR=." >> "$GITHUB_ENV"
           else
-            echo "找不到 project.yml，请确认仓库结构" >&2
+            echo "::error::找不到 project.yml，请确认仓库根目录下是 ios/project.yml"
             exit 1
           fi
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
-        working-directory: ${{ env.IOS_DIR }}
-        run: xcodegen generate
-      - name: Archive unsigned app
+
+      # brew install xcodegen 自带 auto-update，一步就可能 3~5 分钟，还常因网络抖动重试。
+      # 改成下 4MB 官方预编译包，通常几秒装完。
+      - name: 安装 XcodeGen
+        timeout-minutes: 6
+        run: |
+          set -eu
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "系统已有 XcodeGen：$(xcodegen --version)"
+            exit 0
+          fi
+          url="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "下载 $url"
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o /tmp/xcodegen.zip "$url"; then
+            rm -rf /tmp/xg && mkdir -p /tmp/xg
+            unzip -q /tmp/xcodegen.zip -d /tmp/xg
+            bin="$(find /tmp/xg -type f -name xcodegen | head -n 1)"
+            if [ -n "$bin" ] && [ -x "$bin" ]; then
+              root="$(dirname "$(dirname "$bin")")"
+              sudo mkdir -p /opt/xcodegen
+              sudo cp -R "$root"/. /opt/xcodegen/
+              sudo ln -sf /opt/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
+            fi
+          fi
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            echo "::warning::预编译包没装上，退回 Homebrew"
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: 生成 Xcode 工程
         working-directory: ${{ env.IOS_DIR }}
         run: |
+          xcodegen generate
+          xcodebuild -list -project OpenWrtMonitor.xcodeproj
+
+      - name: 缓存 Swift 包
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.IOS_DIR }}/build/spm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Package.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: 解析 Swift 包依赖
+        working-directory: ${{ env.IOS_DIR }}
+        timeout-minutes: 10
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project OpenWrtMonitor.xcodeproj \
+            -scheme OpenWrtMonitor \
+            -clonedSourcePackagesDirPath build/spm
+
+      - name: 构建（不签名）
+        working-directory: ${{ env.IOS_DIR }}
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          mkdir -p build
           xcodebuild archive \
             -project OpenWrtMonitor.xcodeproj \
             -scheme OpenWrtMonitor \
@@ -33,19 +299,75 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath build/OpenWrtMonitor.xcarchive \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath build/spm \
+            -resultBundlePath build/OpenWrtMonitor.xcresult \
+            -quiet \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM=""
-      - name: Package IPA
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tee build/archive.log
+
+      - name: 打包 IPA
         working-directory: ${{ env.IOS_DIR }}
         run: |
+          set -eu
+          app="build/OpenWrtMonitor.xcarchive/Products/Applications/OpenWrtMonitor.app"
+          test -d "$app"
+
+          # 产物里必须真的记着这两项，否则系统照样按旧版小屏 App 处理（四周黑边）。
+          built_sdk="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$app/Info.plist" 2>/dev/null || echo 未知)"
+          launch="$(/usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$app/Info.plist" 2>/dev/null || echo 缺失)"
+          echo "产物 DTSDKName: $built_sdk"
+          echo "产物 UILaunchScreen: $launch"
+          case "$launch" in
+            缺失|"") echo "::error::产物 Info.plist 里没有 UILaunchScreen，系统会把 App 当旧版小屏应用加黑边。" ; exit 1 ;;
+          esac
+
+          rm -rf build/Payload
           mkdir -p build/Payload
-          cp -R build/OpenWrtMonitor.xcarchive/Products/Applications/OpenWrtMonitor.app build/Payload/
-          cd build
-          zip -r OpenWrtMonitor-unsigned.ipa Payload
-      - name: Upload IPA
+          cp -R "$app" build/Payload/
+          rm -f build/OpenWrtMonitor-unsigned.ipa
+          (cd build && /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload OpenWrtMonitor-unsigned.ipa)
+          shasum -a 256 build/OpenWrtMonitor-unsigned.ipa | tee build/ipa.sha256
+          size="$(du -h build/OpenWrtMonitor-unsigned.ipa | cut -f1)"
+          sha="$(cut -d' ' -f1 build/ipa.sha256)"
+          {
+            echo "### 构建成功（${{ matrix.runner }}）"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 运行器 | \`${RUNNER_NAME}\` |"
+            echo "| Xcode | \`$(xcodebuild -version | head -n 1)\` |"
+            echo "| 产物 SDK（DTSDKName） | \`${built_sdk}\` |"
+            echo "| IPA 大小 | ${size} |"
+            echo "| SHA256 | \`${sha}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrtMonitor-unsigned-ipa
+          # 带上运行器名，auto 模式下两个池子各出一份，下哪个都一样
+          name: OpenWrtMonitor-unsigned-ipa-${{ matrix.runner }}
           path: ${{ env.IOS_DIR }}/build/OpenWrtMonitor-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 失败时上传日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-failure-${{ matrix.runner }}
+          path: |
+            ${{ env.IOS_DIR }}/build/archive.log
+            ${{ env.IOS_DIR }}/build/OpenWrtMonitor.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 失败提示
+        if: failure()
+        run: |
+          echo "::error::构建失败或超时，已上传 archive.log 与 xcresult，先看日志里最后一个 error: 行。"
+          echo "若全程停在 Queued（等机器），说明该标签的池子满：重跑一次，或改用默认的 auto。"
