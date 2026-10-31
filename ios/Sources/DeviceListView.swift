@@ -10,6 +10,9 @@ import SwiftUI
 /// （用户：「这三个弹出窗口都改成（新建连接）这种的弹窗」）
 /// 另两个面板——「切换连接」「选择配置文件」——走同一套，三个摆在一起是同一个东西。
 ///
+/// v2.0.3：列表下面多了一个「离线设备」分区（自动清理开关 / 离线时长 / 已隐藏 + 恢复），
+/// 从「设置」页整张卡搬过来——这几项改的就是上面这份列表，放在同一屏才说得通。
+///
 /// **改名与删除确认仍是面板内自绘的卡片，不用系统 alert / confirmationDialog。**
 /// 在 sheet 内部弹这两个系统弹窗，iOS 26 会把浮层锚到页面上方、或者干脆不出现
 /// （用户原话：「删除这个弹窗弹出的位置不对，点铅笔编辑没反应」）。
@@ -45,6 +48,8 @@ struct DeviceListView: View {
                 } footer: {
                     Text("点右侧铅笔可改名；离线设备会变灰，也可以点垃圾桶从列表里移除。")
                 }
+
+                offlineSection
             }
             .navigationTitle("连接设备")
             .navigationBarTitleDisplayMode(.inline)
@@ -96,7 +101,7 @@ struct DeviceListView: View {
                     .foregroundStyle(.tertiary)
                 Text("离线设备已清理")
                     .font(.subheadline.weight(.medium))
-                Text("去「设置 → 设备列表」可以一键恢复")
+                Text("在本页下方「离线设备」里可以一键恢复")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -186,6 +191,61 @@ struct DeviceListView: View {
             .accessibilityLabel("重命名 \(name)")
         }
         .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+    }
+
+    // MARK: - 离线设备的去留
+
+    /// 自动清理开关 + 时长 + 「已隐藏 N 台 / 恢复」。
+    ///
+    /// v2.0.3 从「设置 → 设备列表」整张卡搬到这里：这几项**改的就是上面这份列表**，
+    /// 原来放在另一个页面，用户看见「怎么少了两台」还得再翻到设置页去改；
+    /// 搬过来之后开关和结果在同一屏，改完立刻能看见列表变化。
+    /// 版式跟着这个面板走系统 Form 分组，不再用设置页那种自绘卡片。
+    @ViewBuilder
+    private var offlineSection: some View {
+        Section {
+            Toggle("自动清理离线设备", isOn: $model.autoRemoveOffline)
+
+            if model.autoRemoveOffline {
+                // 时长做成菜单选择，不做滑条——「离线多久算久」是几档常识值，不是连续量。
+                Picker("离线超过", selection: $model.offlineRemoveMinutes) {
+                    ForEach(Self.offlineChoices, id: \.self) { minutes in
+                        Text(Self.durationLabel(minutes)).tag(minutes)
+                    }
+                }
+            }
+
+            if model.hiddenDeviceCount > 0 {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("已隐藏 \(model.hiddenDeviceCount) 台")
+                            .font(.subheadline)
+                        Text("设备重新连上会自动回到列表")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("恢复") {
+                        model.restoreHiddenDevices()
+                    }
+                    .font(.subheadline.weight(.medium))
+                    // borderless：不加这行，点这一行任何位置都会触发恢复。
+                    .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Text("离线设备")
+        } footer: {
+            Text("离线够久就从列表里移除，不影响路由器租约。")
+        }
+    }
+
+    private static let offlineChoices = [15, 60, 360, 1440]
+
+    private static func durationLabel(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) 分钟" }
+        if minutes < 1440 { return "\(minutes / 60) 小时" }
+        return "\(minutes / 1440) 天"
     }
 
     // MARK: - 面板内的浮层
