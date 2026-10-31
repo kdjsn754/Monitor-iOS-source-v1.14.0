@@ -85,6 +85,50 @@ extension View {
     }
 }
 
+/// 白底 + `separator` 细边：`softTile` 的「无色版」，形状任意。
+///
+/// 为什么要有它（v1.28.27，用户：「去掉这几个的背景色改成白底」）：
+/// 概览的 CPU / 内存 / 温度 / 风扇四格、代理页的配置行和访问检查四格，原来都是
+/// `softTile`——5% 主色底 + 16% 主色边。单看一块还行，一屏铺开七八块之后整片发蓝，
+/// 格子的边界糊在一起，反而看不出哪几块是一组。
+/// 这些格子的主色**已经由圆环弧、图标、数字各表达过一遍**，底再染一层纯属重复。
+/// 换成白底之后靠一圈 `separator` 划界，颜色全部让给数据。
+///
+/// 和 `rowTile` 是同一种观感，区别只有两点：`rowTile` 固定圆角矩形，这个能接任意
+/// shape（重测按钮、「更换」是胶囊）；`rowTile` 圆角写死 14，这个由调用方给。
+struct PlainTileModifier<S: InsettableShape>: ViewModifier {
+    let shape: S
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                // 深色下不能用 `systemBackground`——那是纯黑（#000），压在 #1C1C1E 的卡片上
+                // 像挖了个洞，格子边框比文字还抢眼。`tertiarySystemBackground`（#2C2C2E）
+                // 比卡片亮一档，层级才对。这个坑 rowTile 已经踩过一次了。
+                shape.fill(colorScheme == .dark
+                           ? Color(.tertiarySystemBackground)
+                           : Color(.systemBackground))
+            }
+            .overlay {
+                shape.strokeBorder(Color(.separator), lineWidth: 0.75)
+            }
+    }
+}
+
+extension View {
+    /// 任意形状的白底 + 细边（胶囊按钮用这个）。
+    func plainTile<S: InsettableShape>(in shape: S) -> some View {
+        modifier(PlainTileModifier(shape: shape))
+    }
+
+    /// 圆角矩形的白底 + 细边（格子用这个）。
+    func plainTile(radius: CGFloat = 12) -> some View {
+        plainTile(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+}
+
 /// 面板 / 卡片里的「行」：和卡片同色 + 一圈细边。
 ///
 /// 这些行以前用 `softTile(.blue)`：5% 蓝底 + 15% 蓝边。一行两行还像块面，

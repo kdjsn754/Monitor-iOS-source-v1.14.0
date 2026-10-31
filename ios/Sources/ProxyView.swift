@@ -156,7 +156,7 @@ struct ProxyView: View {
         }
         .padding(.horizontal, 11)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .softTile(.blue, radius: 12)
+        .plainTile(radius: 12)
     }
 
     /// 面板：一行「图标 + 标题 + 状态标签 + 地址」，下面一条整宽主按钮。
@@ -230,7 +230,7 @@ struct ProxyView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
-        .softTile(accent, in: Capsule())
+        .plainTile(in: Capsule())
     }
 
     private func modeButton(_ title: String, value: String) -> some View {
@@ -470,7 +470,7 @@ struct ProxyView: View {
                         }
                     }
                     .padding(11)
-                    .softTile(.blue, radius: 14)
+                    .plainTile(radius: 14)
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -546,7 +546,7 @@ struct ProxyView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .softTile(.blue, in: Capsule())
+                    .plainTile(in: Capsule())
                     .foregroundStyle(.blue)
                     .contentShape(Capsule())
                 }
@@ -602,7 +602,7 @@ struct ProxyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
-        .softTile(.blue, radius: 12)
+        .plainTile(radius: 12)
     }
 
     /// 小圆点：里面实心 8pt，外面一层同色淡光晕，颜色即延迟档位。

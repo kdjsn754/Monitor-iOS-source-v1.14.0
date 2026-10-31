@@ -339,7 +339,8 @@ struct OverviewView: View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    // 底板比格子底色再深一档：格子本身已经是同色淡底，底板太浅就糊在一起了。
+                    // 格子改成白底之后（v1.28.27），这块 18% 主色方底是整格里唯一还带颜色的块面，
+                    // 图标不会飘在白色上显得没着落。再淡一点就会糊成一片灰。
                     .fill(color.opacity(0.18))
                     .frame(width: 36, height: 36)
 
@@ -375,7 +376,7 @@ struct OverviewView: View {
             }
         }
         .padding(10)
-        .softTile(color, radius: 12)
+        .plainTile(radius: 12)
     }
 
     /// 连接设备只给一个概括：总数 + 来源 + 入口。
@@ -551,8 +552,9 @@ private struct SpeedSparkline: View {
     }
 }
 
-/// CPU / 内存的小圆环块：浅灰底（和温度、风扇两个格子同一种底），
+/// CPU / 内存的小圆环块：**白底 + separator 细边**（v1.28.27 起，原来是 5% 主色淡底）。
 /// 上面一行是图标底板 + 名称 + 右上角小字，下面是圆环和一行明细。
+/// 底色改白之后，颜色只剩三处在说话：圆环的轨道与弧、图标底板、右上角那行小字。
 private struct HardwareGauge: View {
     let title: String
     let icon: String
@@ -596,7 +598,7 @@ private struct HardwareGauge: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .softTile(accent, radius: 12)
+        .plainTile(radius: 12)
     }
 }
 
@@ -607,6 +609,8 @@ private struct RingGauge: View {
     var caption: String = "占用"
     var lineWidth: CGFloat = 12
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private var value: Double {
         guard percent.isFinite else { return 0 }
         return max(0, min(100, percent))
@@ -615,8 +619,13 @@ private struct RingGauge: View {
     var body: some View {
         ZStack {
             // 轨道跟着主色走：原来是一条中性灰，和彩色弧线拼在一起像两种风格。
+            //
+            // 深色下要单独提一档不透明度（v1.28.27）：格子底从「16% 主色淡底」换成中性深灰
+            // （#2C2C2E）之后，13% 的主色轨道压上去几乎看不出，圆环就只剩孤零零一段弧，
+            // 连「进度到哪儿」都读不出来。34% 是试出来的——能看见轨道，又不至于和弧线抢。
+            // 闪存卡那块圆环不在彩底上，同样受益。
             Circle()
-                .stroke(accent.opacity(0.13), lineWidth: lineWidth)
+                .stroke(accent.opacity(colorScheme == .dark ? 0.34 : 0.13), lineWidth: lineWidth)
 
             Circle()
                 .trim(from: 0, to: value / 100)
