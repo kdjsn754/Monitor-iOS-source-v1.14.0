@@ -225,22 +225,12 @@ struct FanControlState: Equatable {
     /// 探不准就不显示——宁可少一格信息，也不要给一个会骗人的绿点。
     var pluginRunning = false
 
-    /// 自动模式下「按当前温度应该给多少 PWM」，只用于界面上的预期提示。
-    /// 逻辑照抄插件 README 的曲线：低于起转温度减回差 → 0，起转到温度墙之间线性，
-    /// 温度墙及以上满速。
-    var expectedPercent: Int? {
-        guard let t = temperature else { return nil }
-        if t >= Double(wallTemp) { return maxPercent }
-        if t < Double(startTemp - hysteresis) { return 0 }
-        if t >= Double(startTemp) {
-            let span = Double(max(1, wallTemp - startTemp))
-            let ratio = (t - Double(startTemp)) / span
-            let value = Double(startPercent) + ratio * Double(maxPercent - startPercent)
-            return min(max(Int(value.rounded()), startPercent), maxPercent)
-        }
-        // 落在回差带里：还没到起转线、也没凉到该停，维持起转值。
-        return startPercent
-    }
+    // v1.28.28 删掉了 `expectedPercent`：它唯一的用途是风扇页那行
+    //「按曲线此刻应为 x%」的提示，而用户要求把那行去掉。
+    // 那个数只把温度代进曲线算一遍，界面上既不解释依据、也不带操作，
+    // 读的人还得自己判断「29% 和实测 26% 算不算异常」。留着就是死代码。
+    // 想恢复的话：`startPercent + (t - startTemp)/(wallTemp - startTemp) * (maxPercent - startPercent)`，
+    // 还要处理回差带和温度墙以上两段。
 }
 
 // MARK: - 页面与采集

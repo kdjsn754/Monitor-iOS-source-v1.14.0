@@ -1178,6 +1178,11 @@ final class AppModel: ObservableObject {
         await fanAction([("enabled", on ? "1" : "0")])
     }
 
+    /// 只切模式、不动参数。
+    ///
+    /// v1.28.28 起界面不再直接调它：`applyFanAuto` 自带 `mode=auto`、`setFanManual`
+    /// 自带 `mode=manual`，一次提交就能把模式和参数一起写掉，先切模式再写参数是
+    /// 两次 commit、两次重启守护进程。留着是给「只想改模式」的场合用。
     func setFanMode(_ mode: FanControlState.Mode) async {
         await fanAction([("mode", mode.rawValue)])
     }

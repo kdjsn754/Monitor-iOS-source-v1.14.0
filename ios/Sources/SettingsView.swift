@@ -517,11 +517,25 @@ struct SettingsView: View {
 struct SectionCard<Content: View>: View {
     let title: String
     let icon: String
+    /// 标题行右侧的「小挂件」：状态胶囊、开关之类。
+    /// 和 `SheetSectionCard` 一样用 AnyView 装——多加一个泛型参数的话，
+    /// 每个已有的调用点都要跟着改签名，而它们都不传这个。
+    let accessory: AnyView?
     let content: Content
 
     init(_ title: String, icon: String, @ViewBuilder content: () -> Content) {
         self.title = title
         self.icon = icon
+        self.accessory = nil
+        self.content = content()
+    }
+
+    init<Trailing: View>(_ title: String, icon: String,
+                         @ViewBuilder accessory: () -> Trailing,
+                         @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.accessory = AnyView(accessory())
         self.content = content()
     }
 
@@ -533,7 +547,8 @@ struct SectionCard<Content: View>: View {
                     .foregroundStyle(.blue)
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                Spacer()
+                Spacer(minLength: 6)
+                if let accessory { accessory }
             }
             content
         }

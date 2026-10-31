@@ -2,8 +2,11 @@ import SwiftUI
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    /// 由 `MainTabs` 传进来：进二级页时把底栏收掉（见 App.swift 的 overlay）。
+    @Binding var hidesTabBar: Bool
     @State private var showAllDevices = false
-    /// 风扇控制面板（点「风扇」那块打开，见 hardwareSection）。
+    /// 风扇控制页（点「风扇」那块打开，见 hardwareSection）。
+    /// v1.28.28 起是 push 进来的独立页面，不再是半屏面板。
     @State private var showFanControl = false
 
     var body: some View {
@@ -40,6 +43,14 @@ struct OverviewView: View {
             }
             .sheet(isPresented: $showAllDevices) {
                 DeviceListView()
+            }
+            // 返回按钮的文案取上一页的标题，这里给一个（导航栏本身是隐藏的，不会显示出来）。
+            .navigationTitle("概览")
+            .navigationDestination(isPresented: $showFanControl) {
+                FanControlView()
+            }
+            .onChange(of: showFanControl) { _, pushed in
+                hidesTabBar = pushed
             }
         }
     }
@@ -287,9 +298,6 @@ struct OverviewView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("风扇 \(model.stats.fanRPM.map { String(format: "%.0f 转", $0) } ?? "无传感器")，点按调整")
-                .sheet(isPresented: $showFanControl) {
-                    FanControlView()
-                }
             }
         }
     }

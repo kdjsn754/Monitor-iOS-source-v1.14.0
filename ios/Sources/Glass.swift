@@ -300,10 +300,18 @@ struct ErrorBanner: View {
 }
 
 struct GlassProminentButtonStyle: ButtonStyle {
+    /// 用不了的时候（比如「没有待应用的改动」）换成灰底灰字。
+    ///
+    /// 别用 `.opacity(0.45)` 代替：那会把白字也一起压成半透明，白字压在半透明蓝底上
+    /// 对比度只剩 1.x:1，按钮上根本读不出字来（v1.28.28 出预览图时才发现的）。
+    /// 灰底 + 次要色文字是系统里「不可用主按钮」的样子，一眼就知道是灰的、也能读清。
+    var dimmed = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(.white)
-            .background(Color.blue, in: Capsule())
+            .foregroundStyle(dimmed ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(Color.white))
+            .background(dimmed ? AnyShapeStyle(Color(.tertiarySystemFill)) : AnyShapeStyle(Color.blue),
+                        in: Capsule())
             .opacity(configuration.isPressed ? 0.82 : 1)
     }
 }

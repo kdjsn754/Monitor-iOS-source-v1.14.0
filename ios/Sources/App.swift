@@ -183,13 +183,17 @@ struct RootView: View {
 struct MainTabs: View {
     @EnvironmentObject private var model: AppModel
     @State private var selection = 0
+    /// 概览页 push 出二级页（风扇控制）时把底栏收掉。
+    /// 底栏是浮在 TabView 上的 overlay，不收的话会压在「应用到路由器」上面，
+    /// 而且一级页的导航栏出现在二级页本来就说不通。
+    @State private var hidesTabBar = false
 
     var body: some View {
         // 系统 TabView 只当作「页面容器」用：它负责保留每一页的滚动位置和弹窗状态，
         // 但底下那条栏由我们自绘（见 AppTabBar），这样才能做到
         // 「选中后图标变实心」—— 系统的 .tabItem 只有一种图，给不了选中态。
         TabView(selection: $selection) {
-            OverviewView()
+            OverviewView(hidesTabBar: $hidesTabBar)
                 .tag(0)
                 .toolbar(.hidden, for: .tabBar)
             ProxyView()
@@ -205,9 +209,13 @@ struct MainTabs: View {
         // 留白来保证，不依赖 TabView 的 inset 向下传播（实测部分 iOS 版本上传不进子页，
         // 会导致最底行被盖住，正是之前截图里看到的现象）。
         .overlay(alignment: .bottom) {
-            AppTabBar(selection: $selection)
-                .padding(.bottom, AppTabBar.bottomPadding)
+            if !hidesTabBar {
+                AppTabBar(selection: $selection)
+                    .padding(.bottom, AppTabBar.bottomPadding)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.18), value: hidesTabBar)
         // 采集跟着页面走：切到哪一页就只采那一页要用的数据，设置页完全不采。
         .onChange(of: selection) { _, value in
             model.setActivePage(AppPage(tab: value))
