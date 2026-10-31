@@ -406,6 +406,26 @@ jobs:
             缺失|"") echo "::error::产物 Info.plist 里没有 UILaunchScreen，系统会把 App 当旧版小屏应用加黑边。" ; exit 1 ;;
           esac
 
+          # ── 版本闸门 ────────────────────────────────────────────────────
+          # 装上包才发现「关于」里还是旧版本，最容易发生在两种情况下：
+          # （1）改版本号只改了一处，（2）装的是上一次成功构建下载下来的旧 IPA。
+          # 这里把产物 Info.plist 里真正的版本号打出来，并和 project.yml 对一遍：
+          # 对不上就是这次构建没带上新版本，直接失败，别让用户拿旧包装完再回头查。
+          built_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist" 2>/dev/null || echo 未知)"
+          built_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist" 2>/dev/null || echo 未知)"
+          want_ver="$(awk '/^[[:space:]]*MARKETING_VERSION:/ {print $2; exit}' project.yml)"
+          want_build="$(awk '/^[[:space:]]*CURRENT_PROJECT_VERSION:/ {print $2; exit}' project.yml)"
+          echo "产物版本: ${built_ver} (${built_build})"
+          echo "工程期望: ${want_ver} (${want_build})"
+          if [ -n "$want_ver" ] && [ "$built_ver" != "$want_ver" ]; then
+            echo "::error::产物里的版本是 ${built_ver}，project.yml 写的却是 ${want_ver}。Info.plist 里的 CFBundleShortVersionString 要写成 \$(MARKETING_VERSION)，版本号只改 project.yml 一处。"
+            exit 1
+          fi
+          if [ -n "$want_build" ] && [ "$built_build" != "$want_build" ]; then
+            echo "::error::产物里的 build 号是 ${built_build}，project.yml 写的却是 ${want_build}。"
+            exit 1
+          fi
+
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$app" build/Payload/
@@ -423,6 +443,7 @@ jobs:
             echo "| 项 | 值 |"
             echo "| --- | --- |"
             echo "| 运行器 | \`${RUNNER_NAME}\` |"
+            echo "| 版本（产物 Info.plist） | \`${built_ver} (${built_build})\` |"
             echo "| Xcode | \`${xv}\` |"
             echo "| 产物 SDK（DTSDKName） | \`${built_sdk}\` |"
             echo "| IPA 大小 | ${size} |"
