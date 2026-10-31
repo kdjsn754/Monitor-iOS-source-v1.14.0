@@ -10,8 +10,9 @@ import SwiftUI
 /// （用户：「这三个弹出窗口都改成（新建连接）这种的弹窗」）
 /// 另两个面板——「切换连接」「选择配置文件」——走同一套，三个摆在一起是同一个东西。
 ///
-/// v2.0.3：列表下面多了一个「离线设备」分区（自动清理开关 / 离线时长 / 已隐藏 + 恢复），
-/// 从「设置」页整张卡搬过来——这几项改的就是上面这份列表，放在同一屏才说得通。
+/// v2.0.4：离线设备的三项设置（自动清理 / 离线时长 / 已隐藏 + 恢复）收进右上角齿轮打开的
+/// `OfflineSettingsView`，本页只留设备列表——三项设置常驻在列表下方会把设备顶得很远。
+/// 齿轮在右、垃圾桶在它左边，垃圾桶仍然只在有离线设备时出现。
 ///
 /// **改名与删除确认仍是面板内自绘的卡片，不用系统 alert / confirmationDialog。**
 /// 在 sheet 内部弹这两个系统弹窗，iOS 26 会把浮层锚到页面上方、或者干脆不出现
@@ -29,6 +30,9 @@ struct DeviceListView: View {
     /// 待删除的设备：点单个是 1 台，点右上角是全部离线。
     /// 非空就浮确认卡片，文案按数量变——不用再维护一个「要不要弹」的布尔。
     @State private var pendingRemove: [DeviceInfo] = []
+
+    /// 右上角齿轮是否把「离线设备」设置页推出来。
+    @State private var showOfflineSettings = false
 
     var body: some View {
         NavigationStack {
@@ -48,8 +52,6 @@ struct DeviceListView: View {
                 } footer: {
                     Text("点右侧铅笔可改名；离线设备会变灰，也可以点垃圾桶从列表里移除。")
                 }
-
-                offlineSection
             }
             .navigationTitle("连接设备")
             .navigationBarTitleDisplayMode(.inline)
@@ -57,8 +59,9 @@ struct DeviceListView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("完成") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    // 只有存在离线设备时才出现垃圾桶，全在线的时候这里不该有能点的东西。
+                // 顺序就是屏幕上的先后：垃圾桶在左、齿轮在最右。
+                // 齿轮恒定出现（它是入口），垃圾桶只在有离线设备时才有。
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     if model.offlineDeviceCount > 0 {
                         Button {
                             editing = nil
@@ -68,7 +71,17 @@ struct DeviceListView: View {
                         }
                         .accessibilityLabel("清理离线设备")
                     }
+                    Button {
+                        showOfflineSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("离线设备设置")
                 }
+            }
+            // 设置项收进二级页：列表页只留设备，否则三项设置会把列表顶得老长。
+            .navigationDestination(isPresented: $showOfflineSettings) {
+                OfflineSettingsView()
             }
         }
         .overlay { modalLayer }
@@ -101,7 +114,7 @@ struct DeviceListView: View {
                     .foregroundStyle(.tertiary)
                 Text("离线设备已清理")
                     .font(.subheadline.weight(.medium))
-                Text("在本页下方「离线设备」里可以一键恢复")
+                Text("点右上角齿轮可以一键恢复")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -193,60 +206,8 @@ struct DeviceListView: View {
         .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
     }
 
-    // MARK: - 离线设备的去留
-
-    /// 自动清理开关 + 时长 + 「已隐藏 N 台 / 恢复」。
-    ///
-    /// v2.0.3 从「设置 → 设备列表」整张卡搬到这里：这几项**改的就是上面这份列表**，
-    /// 原来放在另一个页面，用户看见「怎么少了两台」还得再翻到设置页去改；
-    /// 搬过来之后开关和结果在同一屏，改完立刻能看见列表变化。
-    /// 版式跟着这个面板走系统 Form 分组，不再用设置页那种自绘卡片。
-    @ViewBuilder
-    private var offlineSection: some View {
-        Section {
-            Toggle("自动清理离线设备", isOn: $model.autoRemoveOffline)
-
-            if model.autoRemoveOffline {
-                // 时长做成菜单选择，不做滑条——「离线多久算久」是几档常识值，不是连续量。
-                Picker("离线超过", selection: $model.offlineRemoveMinutes) {
-                    ForEach(Self.offlineChoices, id: \.self) { minutes in
-                        Text(Self.durationLabel(minutes)).tag(minutes)
-                    }
-                }
-            }
-
-            if model.hiddenDeviceCount > 0 {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("已隐藏 \(model.hiddenDeviceCount) 台")
-                            .font(.subheadline)
-                        Text("设备重新连上会自动回到列表")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    Button("恢复") {
-                        model.restoreHiddenDevices()
-                    }
-                    .font(.subheadline.weight(.medium))
-                    // borderless：不加这行，点这一行任何位置都会触发恢复。
-                    .buttonStyle(.borderless)
-                }
-            }
-        } header: {
-            Text("离线设备")
-        } footer: {
-            Text("离线够久就从列表里移除，不影响路由器租约。")
-        }
-    }
-
-    private static let offlineChoices = [15, 60, 360, 1440]
-
-    private static func durationLabel(_ minutes: Int) -> String {
-        if minutes < 60 { return "\(minutes) 分钟" }
-        if minutes < 1440 { return "\(minutes / 60) 小时" }
-        return "\(minutes / 1440) 天"
-    }
+    // 离线设备的三项设置（自动清理 / 时长 / 已隐藏 + 恢复）在 v2.0.4 又挪了一层，
+    // 从本页的列表里搬进右上角齿轮打开的 OfflineSettingsView——列表页只留设备。
 
     // MARK: - 面板内的浮层
 
