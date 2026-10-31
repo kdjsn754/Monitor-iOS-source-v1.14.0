@@ -473,7 +473,7 @@ struct OverviewView: View {
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .rowTile(radius: 14)
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .cardTapShape()
         }
         .buttonStyle(.plain)
         .disabled(model.devices.isEmpty && model.hiddenDeviceCount == 0)

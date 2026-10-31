@@ -139,7 +139,7 @@ struct PollSettingsView: View {
                         lineWidth: 1
                     )
             }
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .cardTapShape()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(preset.title)，每 \(preset.id) 秒")

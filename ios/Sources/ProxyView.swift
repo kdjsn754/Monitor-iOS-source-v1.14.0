@@ -471,7 +471,7 @@ struct ProxyView: View {
                     }
                     .padding(11)
                     .plainTile(radius: 14)
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .cardTapShape()
                 }
                 .buttonStyle(.plain)
                 .disabled(oc.configs.isEmpty || model.busy)

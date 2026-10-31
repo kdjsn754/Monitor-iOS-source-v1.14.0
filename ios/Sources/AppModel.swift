@@ -207,11 +207,6 @@ final class AppModel: ObservableObject {
         applyDeviceVisibility()
     }
 
-    /// 一次清掉当前所有离线设备。
-    func removeOfflineDevices() {
-        removeDevices(devices.filter { !$0.online })
-    }
-
     /// 把删掉的设备全放回来。设备下次上线其实也会自动回来，
     /// 这个入口是给「手滑删错」留的后路。
     func restoreHiddenDevices() {
@@ -1094,7 +1089,7 @@ final class AppModel: ObservableObject {
             }
             var results: [AccessCheck.Site: (Bool, Int)] = [:]
             for line in text.split(separator: "\n") {
-                let fields = line.split(separator: " ").map(String.init)
+                let fields = splitFields(line)
                 guard fields.count >= 3, fields[0] == "C",
                       let site = AccessCheck.Site(rawValue: fields[1]) else { continue }
                 let code = fields[2]
@@ -1451,7 +1446,7 @@ final class AppModel: ObservableObject {
         var fsAvail: UInt64 = 0
 
         for line in text.split(separator: "\n") {
-            let fields = line.split(separator: " ").map(String.init)
+            let fields = splitFields(line)
             switch fields.first ?? "" {
             case "ROM" where fields.count >= 3:
                 romTotal = (UInt64(fields[1]) ?? 0) * 1024
@@ -1548,7 +1543,7 @@ final class AppModel: ObservableObject {
 
         var result: [DeviceInfo] = []
         for line in (sections["LEASES"] ?? "").split(separator: "\n") {
-            let fields = line.split(separator: " ").map(String.init)
+            let fields = splitFields(line)
             guard fields.count >= 4 else { continue }
             let ip = fields[2]
             let mac = fields[1].lowercased()
@@ -1639,7 +1634,7 @@ final class AppModel: ObservableObject {
         // 所以一律不算在线。FAILED / INCOMPLETE 更不算。
         var sawNeigh = false
         for line in neigh.split(separator: "\n") {
-            let fields = line.split(separator: " ").map(String.init)
+            let fields = splitFields(line)
             guard let ip = fields.first, let state = fields.last else { continue }
             sawNeigh = true
             guard ["REACHABLE", "DELAY", "PROBE"].contains(state) else { continue }
@@ -1653,7 +1648,7 @@ final class AppModel: ObservableObject {
         // 这条路拿不到状态，STALE 残留会误判为在线，但总比「全员在线」准。
         if !sawNeigh {
             for line in arp.split(separator: "\n").dropFirst() {
-                let fields = line.split(separator: " ").map(String.init)
+                let fields = splitFields(line)
                 guard fields.count >= 4, fields[2] != "0x0" else { continue }
                 result.ips.insert(fields[0])
                 result.macs.insert(fields[3].lowercased())
@@ -2175,15 +2170,15 @@ func formatBytes(_ value: Double) -> String {
     return String(format: index == 0 ? "%.0f %@" : "%.1f %@", number, units[index])
 }
 
+/// 闪存容量：单位规则和 `formatBytes` 完全一致，只有一处不同——
+/// 不到 1 MB 时取整显示（`512 KB`，不带小数），因为闪存剩余很少掉到这个量级，
+/// 真掉到了也没人关心 0.1 KB。之前这里把 GB / MB 两档又抄了一遍，纯属重复。
 func formatFlashBytes(_ value: UInt64) -> String {
     let bytes = Double(value)
-    if bytes >= 1024 * 1024 * 1024 {
-        return String(format: "%.1f GB", bytes / (1024 * 1024 * 1024))
+    guard bytes >= 1024 * 1024 else {
+        return String(format: "%.0f KB", bytes / 1024)
     }
-    if bytes >= 1024 * 1024 {
-        return String(format: "%.1f MB", bytes / (1024 * 1024))
-    }
-    return String(format: "%.0f KB", bytes / 1024)
+    return formatBytes(bytes)
 }
 
 func formatSpeed(_ value: Double) -> String {
@@ -2199,3 +2194,12 @@ func formatUptime(_ seconds: Double) -> String {
     if hours > 0 { return "\(hours)小时 \(minutes)分钟" }
     return "\(minutes)分钟"
 }
+
+/// 把采集脚本输出的一行按空格切开。
+///
+/// 这条 `line.split(separator: " ").map(String.init)` 原本在五个解析函数里各写一遍
+/// （访问检查、闪存、DHCP 租约、邻居表、ARP 表），除了重复之外没有任何差别。
+private func splitFields<S: StringProtocol>(_ line: S) -> [String] {
+    line.split(separator: " ").map(String.init)
+}
+

@@ -156,7 +156,7 @@ struct SettingsView: View {
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
                 .foregroundStyle(canOpenWeb ? Color.white : Color.secondary)
-                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .cardTapShape()
             }
             .buttonStyle(.plain)
             .disabled(!canOpenWeb)
@@ -215,7 +215,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
             .rowTile(radius: 14)
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .cardTapShape()
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

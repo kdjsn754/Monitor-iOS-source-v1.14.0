@@ -378,3 +378,14 @@ struct SheetOverlayButton: View {
         .buttonStyle(.plain)
     }
 }
+
+extension View {
+    /// 整行可点：点击区域跟着圆角走，四个角的空白才不会误响应。
+    ///
+    /// 设备入口、轮询预设、配置行、网页后台按钮四处原本各写一遍
+    /// `.contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))`，
+    /// 圆角数值散在四个文件里，改一处样式要翻四遍。
+    func cardTapShape(radius: CGFloat = 14) -> some View {
+        contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+}
