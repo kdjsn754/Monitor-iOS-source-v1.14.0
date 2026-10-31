@@ -17,7 +17,9 @@ struct OpenWrtMonitorApp: App {
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("themeMode") private var themeMode = "system"
+    // v1.28.26：默认值从 "system" 改成 "light"——「跟随系统」选项已删，
+    // 新装用户不该落在一个界面上根本不存在的状态上。
+    @AppStorage("themeMode") private var themeMode = "light"
 
     // 连接弹窗：只在“发起连接”时出现，成功后自动收起，失败给重试。
     @State private var popupPhase: ConnectionPhase?
@@ -78,6 +80,7 @@ struct RootView: View {
         .preferredColorScheme(colorScheme)
         .tint(.blue)
         .animation(.easeInOut(duration: 0.2), value: popupPhase)
+        .onAppear { migrateThemeModeIfNeeded() }
         .onChange(of: model.connecting) { _, isConnecting in
             if isConnecting {
                 connectStartedAt = Date()
@@ -158,8 +161,22 @@ struct RootView: View {
         switch themeMode {
         case "light": return .light
         case "dark": return .dark
+        // 理论上到不了这儿：默认值是 "light"，老值在 onAppear 里就被迁移成具体项了。
+        // 留 nil（= 跟随系统）只是为了在迁移跑起来之前别把界面强行掰成浅色。
         default: return nil
         }
+    }
+
+    /// 「跟随系统」在 v1.28.26 被删掉了，但老用户的 UserDefaults 里还存着 "system"。
+    /// 不处理的话会卡在两个坑里：`colorScheme` 返回 nil 让他们永久跟随系统（界面上根本没有这个选项），
+    /// 设置页两个胶囊也都不高亮（两个都不等于 "system"）。
+    ///
+    /// 所以第一次进来时按**当前**系统外观落成 light / dark 并写回，之后系统换外观就不再偷偷跟着变。
+    /// 用 `UITraitCollection` 而不是 `@Environment(\.colorScheme)`：这里要的是「本次启动时窗口真实的样子」，
+    /// 而环境里的 colorScheme 会被上面那个 `.preferredColorScheme(colorScheme)` 影响，读到的是我们自己的设定。
+    private func migrateThemeModeIfNeeded() {
+        guard themeMode != "light", themeMode != "dark" else { return }
+        themeMode = UITraitCollection.current.userInterfaceStyle == .dark ? "dark" : "light"
     }
 }
 

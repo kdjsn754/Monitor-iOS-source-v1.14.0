@@ -5,7 +5,9 @@ import UIKit
 /// 采集频率只留一行摘要，细项进二级页。
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @AppStorage("themeMode") private var themeMode = "system"
+    // v1.28.26：默认值从 "system" 改成 "light"——「跟随系统」这个选项已经删了，
+    // 新装用户不该落在一个界面上不存在的状态上。老用户的 "system" 由 RootView 迁移。
+    @AppStorage("themeMode") private var themeMode = "light"
     @State private var confirmLogout = false
     @State private var editorRoute: ConnectionEditorRoute?
     @State private var showRouterWeb = false
@@ -241,12 +243,19 @@ struct SettingsView: View {
     private struct ThemeOption: Identifiable {
         let id: String
         let title: String
+        let icon: String
     }
 
+    /// v1.28.26 起只剩两项（用户：「把外观跟随系统去掉，浅色跟深色加上太阳月亮图标」）。
+    ///
+    /// 图标固定用实心版，不做「选中实心 / 未选中空心」那套：
+    /// `moon` 的轮廓在 15pt 下是一条细弧，看着像个括号，认不出是月亮；
+    /// 统一实心之后形状始终一致，选中与否交给蓝底、蓝字、加粗三重提示就够。
+    ///
+    /// 配色一个字没动——仍是 `blue` 16%/45% 的淡底细边 + 选中蓝字。
     private var themeOptions: [ThemeOption] {
-        [ThemeOption(id: "system", title: "跟随系统"),
-         ThemeOption(id: "light", title: "浅色"),
-         ThemeOption(id: "dark", title: "深色")]
+        [ThemeOption(id: "light", title: "浅色", icon: "sun.max.fill"),
+         ThemeOption(id: "dark", title: "深色", icon: "moon.fill")]
     }
 
     private var appearanceCard: some View {
@@ -257,7 +266,7 @@ struct SettingsView: View {
                         Button {
                             themeMode = option.id
                         } label: {
-                            Text(option.title)
+                            Label(option.title, systemImage: option.icon)
                                 .font(.subheadline.weight(themeMode == option.id ? .semibold : .regular))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 9)

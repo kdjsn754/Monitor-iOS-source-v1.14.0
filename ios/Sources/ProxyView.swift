@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 流量 → 内核 → 配置 → 检查」重排。
+/// 代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 实时状态 → 配置 → 检查」重排。
+/// 流量和内核指标原来是两张卡，v1.28.24 合成一张「实时状态」。
 struct ProxyView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showPanel = false
@@ -42,8 +43,7 @@ struct ProxyView: View {
                         }
                     }
                     heroCard
-                    trafficCard
-                    runtimeCard
+                    liveCard
                     configCard
                     accessCard
                 }
@@ -280,32 +280,30 @@ struct ProxyView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 流量
+    // MARK: - 实时状态（流量 + 内核）
 
-    private var trafficCard: some View {
-        SectionCard("实时流量", icon: "arrow.up.arrow.down") {
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    flowBlock("下载", value: formatSpeed(metrics.download),
-                              icon: "arrow.down.circle.fill", color: .blue)
-                    Divider().frame(height: 42)
-                    flowBlock("上传", value: formatSpeed(metrics.upload),
-                              icon: "arrow.up.circle.fill", color: .purple)
-                }
+    /// 流量和内核指标以前是上下两张卡（「实时流量」「内核状态」），v1.28.24 合成一张；
+    /// v1.28.25 又把它收了一遍，原因是上一版「速率 → 两块累计格 → 2×2 指标格」是
+    /// **六块同色小底**：底色一样，选不出主次；而累计那行的箭头和上面下载/上传的箭头
+    /// 是同样的符号，等于把方向说了两遍。
+    ///
+    /// 现在：
+    /// · 累计折进速率列——「哪个方向 / 多少速率 / 本次共走多少」竖着读完，箭头只出现一次；
+    /// · 六块小底全去掉，改用一横一竖两条 Divider 分格，卡里只剩颜色、没有色块；
+    /// · 顺序不换：流量在上，它是这页唯一每 2 秒变一次、真正「会动」的数。
+    private var liveCard: some View {
+        SectionCard("实时状态", icon: "waveform.path.ecg") {
+            VStack(spacing: 0) {
+                trafficRow
+                    .padding(.bottom, 13)
 
-                Divider().opacity(0.5)
+                Divider()
 
-                // 以前是「标签 12pt + 数值 12pt」挤在一行，跟上面的实时速率一比
-                // 明显像脚注。改成两块同高的累计格：图标 + 小标签 + 17pt 数值。
-                HStack(spacing: 10) {
-                    totalTile("本次累计下载",
-                              value: formatBytes(Double(metrics.downloadTotal)),
-                              icon: "arrow.down.circle.fill", color: .blue)
-                    totalTile("本次累计上传",
-                              value: formatBytes(Double(metrics.uploadTotal)),
-                              icon: "arrow.up.circle.fill", color: .purple)
-                }
+                statsGrid
+                    .padding(.top, 12)
 
+                // 这条橙字挂在卡底：它说的是整条内核接口（端口 / 面板密码），
+                // 流量和下面四项一起受影响，塞到任何一半下面都只说对一半。
                 if oc.running, !metrics.apiReachable {
                     Label("读不到内核接口：端口 \(oc.panelPort) 无响应，或控制面板密码不一致。数字会停在上一次的值。",
                           systemImage: "exclamationmark.triangle.fill")
@@ -313,99 +311,102 @@ struct ProxyView: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 12)
                 }
             }
         }
     }
 
-    private func flowBlock(_ label: String, value: String,
-                           icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    /// 上半：两列速率，各自下面挂「本次累计」。
+    /// 中间那条竖线用 `Divider()`——它自己会撑到两边内容的高度，不用手算线段长度。
+    private var trafficRow: some View {
+        HStack(spacing: 0) {
+            rateColumn("下载", value: formatSpeed(metrics.download),
+                       total: formatBytes(Double(metrics.downloadTotal)),
+                       icon: "arrow.down.circle.fill", color: .blue)
+
+            Divider()
+
+            rateColumn("上传", value: formatSpeed(metrics.upload),
+                       total: formatBytes(Double(metrics.uploadTotal)),
+                       icon: "arrow.up.circle.fill", color: .purple)
+                .padding(.leading, 14)
+        }
+    }
+
+    private func rateColumn(_ label: String, value: String, total: String,
+                            icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
             Label(label, systemImage: icon)
                 .font(.caption)
                 .foregroundStyle(color)
             Text(value)
-                .font(.title3.bold().monospacedDigit())
+                .font(.system(size: 23, weight: .bold))
+                .monospacedDigit()
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
+            Text("累计 \(total)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 累计流量格：左边一枚彩色箭头，右边「小标签 + 大数值」。
-    private func totalTile(_ label: String, value: String,
-                           icon: String, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(color)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                Text(value)
-                    .font(.system(size: 17, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .softTile(color, radius: 12)
-    }
-
-    // MARK: - 内核
-
-    private var runtimeCard: some View {
-        SectionCard("内核状态", icon: "cpu") {
-            LazyVGrid(columns: [
-                GridItem(.flexible(), spacing: 10),
-                GridItem(.flexible(), spacing: 10)
-            ], spacing: 10) {
-                statTile("连接数", "\(metrics.connections)",
+    /// 下半：2×2 指标表。格子没有底色，只靠一横一竖两条细线分格，
+    /// 高度和重量都比上面的速率低一档——它本来就是「顺带看一眼」的信息。
+    private var statsGrid: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                statCell("连接数", "\(metrics.connections)",
                          icon: "point.3.connected.trianglepath.dotted", color: .teal)
-                statTile("内存", formatBytes(Double(metrics.memory)),
+                Divider()
+                statCell("内存", formatBytes(Double(metrics.memory)),
                          icon: "memorychip", color: .indigo)
-                // CPU 和概览页的 CPU 圆环用同一个主色蓝，不再用橙——橙色留给温度和告警。
-                statTile("CPU", String(format: "%.1f%%", metrics.cpu),
-                         icon: "cpu", color: .blue)
-                statTile("负载", String(format: "%.1f%%", metrics.load),
-                         icon: "speedometer", color: .purple)
+                    .padding(.leading, 14)
             }
+            .padding(.vertical, 8)
+
+            Divider()
+
+            HStack(spacing: 0) {
+                // CPU 和概览页的 CPU 圆环用同一个主色蓝，不再用橙——橙色留给温度和告警。
+                statCell("CPU", String(format: "%.1f%%", metrics.cpu),
+                         icon: "cpu", color: .blue)
+                Divider()
+                statCell("负载", String(format: "%.1f%%", metrics.load),
+                         icon: "speedometer", color: .purple)
+                    .padding(.leading, 14)
+            }
+            .padding(.vertical, 8)
         }
     }
 
-    private func statTile(_ label: String, _ value: String, icon: String,
-                          color: Color = .blue) -> some View {
+    /// 一格指标：小图标 + 「名称 / 数值」两行，没有底也没有边。
+    private func statCell(_ label: String, _ value: String,
+                          icon: String, color: Color) -> some View {
         HStack(spacing: 9) {
             Image(systemName: icon)
-                .font(.caption)
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(color)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
+                .frame(width: 15)
+
+            VStack(alignment: .leading, spacing: 1) {
                 Text(label)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(value)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
+
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .softTile(color, radius: 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - 配置
