@@ -2,6 +2,8 @@ import SwiftUI
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    /// 闪存卡的轨道色 / 图例点色要分深浅两档，所以这一页也得读主题。
+    @Environment(\.colorScheme) private var colorScheme
     /// 由 `MainTabs` 传进来：进二级页时把底栏收掉（见 App.swift 的 overlay）。
     @Binding var hidesTabBar: Bool
     @State private var showAllDevices = false
@@ -159,14 +161,15 @@ struct OverviewView: View {
                             accent: flashTone(info.usedFraction),
                             diameter: 98,
                             caption: "已用",
-                            lineWidth: 11
+                            lineWidth: 11,
+                            track: flashTrack
                         )
 
                         VStack(spacing: 11) {
                             flashRow("已用", bytes: info.usedBytes,
                                      color: flashTone(info.usedFraction))
                             flashRow("剩余", bytes: info.available,
-                                     color: Color(.systemGray3), hollow: true)
+                                     color: flashTrackDot)
                             Divider().opacity(0.5)
                             HStack(spacing: 6) {
                                 Text("总容量")
@@ -204,18 +207,16 @@ struct OverviewView: View {
         }
     }
 
-    /// 闪存的一行：色点（剩余是空心）→ 名称 → 容量数字。
-    private func flashRow(_ title: String, bytes: UInt64,
-                          color: Color, hollow: Bool = false) -> some View {
+    /// 闪存的一行：色点 → 名称 → 容量数字。
+    ///
+    /// v1.28.30 起「剩余」不再画空心圈：圆环剩下的那一段是实打实的一块灰，
+    /// 图例却是灰色空心圈，两处各画各的（用户：「剩余颜色跟剩余的图例对不上」）。
+    /// 现在圆环轨道和这个点共用同一族灰，只按面积差一档（见 flashTrack / flashTrackDot）。
+    private func flashRow(_ title: String, bytes: UInt64, color: Color) -> some View {
         HStack(spacing: 7) {
-            Group {
-                if hollow {
-                    Circle().strokeBorder(color, lineWidth: 1.5)
-                } else {
-                    Circle().fill(color)
-                }
-            }
-            .frame(width: 8, height: 8)
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
 
             Text(title)
                 .font(.caption)
@@ -229,6 +230,21 @@ struct OverviewView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
+    }
+
+    /// 闪存圆环的轨道：中性灰。
+    ///
+    /// 它同时是「剩余」的那一段，所以必须和图例的灰点对上；
+    /// CPU / 内存那两个环没有图例要对应，轨道继续跟着主色走（RingGauge 里 track 传 nil）。
+    private var flashTrack: Color {
+        colorScheme == .dark ? Color(.systemGray4) : Color(.systemGray5)
+    }
+
+    /// 「剩余」的色点：比轨道深一档。
+    /// 8pt 的小圆点面积只有轨道的一小截，用轨道的颜色会淡到看不见，
+    /// 这是缩小面积后的视觉补偿，不是另起一套颜色。
+    private var flashTrackDot: Color {
+        colorScheme == .dark ? Color(.systemGray3) : Color(.systemGray4)
     }
 
     /// 占用低于 90% 用蓝色，90% 起转橙，97% 起转红——和进度条、百分比同一套颜色。
@@ -616,6 +632,9 @@ private struct RingGauge: View {
     var diameter: CGFloat = 112
     var caption: String = "占用"
     var lineWidth: CGFloat = 12
+    /// 轨道色。不传就跟着主色走（同一支色的淡版）。
+    /// 闪存那一环传中性灰——它的轨道就是「剩余」那一段，得和图例的灰点对上。
+    var track: Color? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -626,14 +645,17 @@ private struct RingGauge: View {
 
     var body: some View {
         ZStack {
-            // 轨道跟着主色走：原来是一条中性灰，和彩色弧线拼在一起像两种风格。
+            // 轨道默认跟着主色走：原来是一条中性灰，和彩色弧线拼在一起像两种风格。
             //
             // 深色下要单独提一档不透明度（v1.28.27）：格子底从「16% 主色淡底」换成中性深灰
             // （#2C2C2E）之后，13% 的主色轨道压上去几乎看不出，圆环就只剩孤零零一段弧，
             // 连「进度到哪儿」都读不出来。34% 是试出来的——能看见轨道，又不至于和弧线抢。
-            // 闪存卡那块圆环不在彩底上，同样受益。
+            //
+            // v1.28.30 起闪存那一环例外：它有图例要对应，轨道由 track 传进来（中性灰），
+            // 不再跟着主色。CPU / 内存两个环照旧。
             Circle()
-                .stroke(accent.opacity(colorScheme == .dark ? 0.34 : 0.13), lineWidth: lineWidth)
+                .stroke(track ?? accent.opacity(colorScheme == .dark ? 0.34 : 0.13),
+                        lineWidth: lineWidth)
 
             Circle()
                 .trim(from: 0, to: value / 100)
