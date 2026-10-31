@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// 代理（OpenClash）：功能与旧版一致，只是把信息按「状态 → 实时状态 → 配置 → 检查」重排。
+/// 代理（OpenClash）：功能与旧版一致，只是把信息按
+/// 「状态 → 实时状态 → 控制面板 → 配置 → 检查」重排。
 /// 流量和内核指标原来是两张卡，v1.28.24 合成一张「实时状态」。
+/// 控制面板 v2.0.1 从「状态与操作」卡的下半段拆出来，独立成卡。
 struct ProxyView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showPanel = false
@@ -27,7 +29,7 @@ struct ProxyView: View {
             return model.ocStateLoaded ? "未检测到 OpenClash" : "正在读取 OpenClash 状态…"
         }
         if !oc.running { return "服务已停止，启动后可查看流量" }
-        // 面板地址已经挪到卡片下半部分，这里改说「当前跑的是哪份配置」，
+        // 面板地址在「控制面板」卡里，这里改说「当前跑的是哪份配置」，
         // 不再重复一遍端口号。
         let name = oc.config.isEmpty ? "" : (oc.config as NSString).lastPathComponent
         return name.isEmpty ? "运行中" : "配置 \(name)"
@@ -44,6 +46,8 @@ struct ProxyView: View {
                     }
                     heroCard
                     liveCard
+                    // 没装插件就不出现这张卡：它只会给一个必然打不开的入口。
+                    if oc.installed { panelCard }
                     configCard
                     accessCard
                 }
@@ -123,12 +127,6 @@ struct ProxyView: View {
                 }
                 .disabled(model.busy)
                 .opacity(model.busy ? 0.55 : 1)
-
-                // 控制面板并进这张卡：以前它自己占一张卡，标题、图标、状态跟这里
-                // 几乎是重复的。现在只隔一条细线，上半是「状态与操作」，下半是「面板入口」。
-                Divider().opacity(0.5)
-
-                panelBlock
             } else if !model.ocStateLoaded {
                 // 第一拍还没回来：给一条「正在读取」，别把这块留白，也别急着下结论。
                 // 以前这里直接按「没装」渲染，于是进页面先看到一句
@@ -159,64 +157,60 @@ struct ProxyView: View {
         .plainTile(radius: 12)
     }
 
-    /// 面板：一行「图标 + 标题 + 状态标签 + 地址」，下面一条整宽主按钮。
-    private var panelBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(Color.blue.opacity(0.12))
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.blue)
-                }
+    // MARK: - 控制面板
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("控制面板")
+    /// 控制面板独立成卡，紧跟「实时状态」。
+    ///
+    /// 它本来自己占一张卡，后来并进「状态与操作」当卡内下半段（理由是两边标题、图标、
+    /// 状态几乎是重复的）。并进去之后那张卡同时管三件事——模式切换、启停重启、面板入口，
+    /// 上下两半各自带按钮，读起来像两张卡被一条细线粘在一起；而且面板入口和
+    /// 「实时状态 / 代理配置 / 访问检查」一样是在回答「东西在哪儿看」，跟启停不是一类动作。
+    /// 所以再拆出来：标题行交给 `SectionCard`（`accessory` 挂「可打开 / 未就绪」），
+    /// 卡里只剩地址和一枚整宽主按钮。
+    private var panelCard: some View {
+        SectionCard("控制面板", icon: "rectangle.on.rectangle",
+                    accessory: { panelBadge }) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(panelAddress)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Button {
+                    showPanel = true
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "safari.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("打开控制面板")
                             .font(.subheadline.weight(.semibold))
-                        Text(canOpenPanel ? "可打开" : "未就绪")
-                            .font(.system(size: 9, weight: .semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                (canOpenPanel ? Color.green : Color.orange).opacity(0.14),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(canOpenPanel ? Color.green : Color.orange)
                     }
-                    Text(panelAddress)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        canOpenPanel ? Color.blue : Color.blue.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .foregroundStyle(canOpenPanel ? Color.white : Color.secondary)
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-
-                Spacer(minLength: 0)
+                .buttonStyle(.plain)
+                .disabled(!canOpenPanel)
             }
-
-            Button {
-                showPanel = true
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "safari.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("打开控制面板")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    canOpenPanel ? Color.blue : Color.blue.opacity(0.14),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .foregroundStyle(canOpenPanel ? Color.white : Color.secondary)
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(!canOpenPanel)
         }
+    }
+
+    private var panelBadge: some View {
+        Text(canOpenPanel ? "可打开" : "未就绪")
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                (canOpenPanel ? Color.green : Color.orange).opacity(0.14),
+                in: Capsule()
+            )
+            .foregroundStyle(canOpenPanel ? Color.green : Color.orange)
     }
 
     private var statusPill: some View {
