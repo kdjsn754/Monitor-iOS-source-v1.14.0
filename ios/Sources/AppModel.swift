@@ -2199,7 +2199,16 @@ func formatUptime(_ seconds: Double) -> String {
 ///
 /// 这条 `line.split(separator: " ").map(String.init)` 原本在五个解析函数里各写一遍
 /// （访问检查、闪存、DHCP 租约、邻居表、ARP 表），除了重复之外没有任何差别。
-private func splitFields<S: StringProtocol>(_ line: S) -> [String] {
-    line.split(separator: " ").map(String.init)
+///
+/// 参数写成具体的 `Substring` 而不是 `S: StringProtocol`：泛型版本在 CI 上编译不过。
+/// 原因是 `" "` 这个字面量同时能推断成 `Character`（`Collection.split(separator:)`）
+/// 和 `String`（Swift 5.7 起 `String` 也算 `RegexComponent`，走
+/// `StringProtocol.split(separator: some RegexComponent)`），接收方是泛型时
+/// 两个重载的优先级分不出高低，报 `ambiguous use of 'split'`。
+/// 五个调用点传的都是 `text.split(separator: "\n")` 出来的 `Substring`，
+/// 所以收窄成具体类型就回到原来那五行代码的写法，顺带把 `" "` 标成 `Character`
+/// 让重载只剩一个候选。
+private func splitFields(_ line: Substring) -> [String] {
+    line.split(separator: " " as Character).map(String.init)
 }
 
