@@ -3,17 +3,17 @@ import SwiftUI
 /// 全部在线设备。
 ///
 /// 以前是从概览卡片 NavigationLink 推一个二级页出来，为了看一眼 IP 就得离开首页、
-/// 还得再返回一次。现在改成底部 sheet 浮起：卡片上点「查看全部」从底部弹出，
-/// 拖拽条上下拉伸到半屏/全屏，概览的滚动位置和实时曲线都不受影响。
+/// 还得再返回一次。现在改成底部 sheet 浮起，概览的滚动位置和实时曲线都不受影响。
 ///
-/// 版式与「切换连接」「选择配置文件」两个面板完全一致：同一套 `SheetSurface` 底色、
-/// 同一种「标题 + 小字 + 圆形叉」的表头、同一种白底圆角行。三个面板走同一套
-/// 底部 sheet，摆在一起就是同一个 App 的东西。
+/// v1.28.29 起版式和「新建连接」统一：`NavigationStack` + `Form`，
+/// 「完成」在导航栏左上、清理离线在右上，列表用原生分组卡与缩进分隔线。
+/// （用户：「这三个弹出窗口都改成（新建连接）这种的弹窗」）
+/// 另两个面板——「切换连接」「选择配置文件」——走同一套，三个摆在一起是同一个东西。
 ///
-/// **改名与删除确认都是面板内自绘的卡片，不用系统 alert / confirmationDialog。**
+/// **改名与删除确认仍是面板内自绘的卡片，不用系统 alert / confirmationDialog。**
 /// 在 sheet 内部弹这两个系统弹窗，iOS 26 会把浮层锚到页面上方、或者干脆不出现
 /// （用户原话：「删除这个弹窗弹出的位置不对，点铅笔编辑没反应」）。
-/// 自绘一层遮罩 + 卡片，位置永远落在这一屏正中，样式也和其他自绘面板统一。
+/// 自绘一层遮罩 + 卡片，位置永远落在这一屏正中，样式也和 App 的卡片统一。
 struct DeviceListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -27,50 +27,45 @@ struct DeviceListView: View {
     /// 非空就浮确认卡片，文案按数量变——不用再维护一个「要不要弹」的布尔。
     @State private var pendingRemove: [DeviceInfo] = []
 
-    /// 改名时把面板撑到全屏：半屏 + 键盘，输入框会被挤得只剩一条缝。
-    @State private var detent: PresentationDetent = .medium
-
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader("连接设备", caption: headerCaption) {
-                HStack(spacing: 8) {
-                    // 只有存在离线设备时才出现垃圾桶，全在线的时候这里不该有能点的东西。
-                    if model.offlineDeviceCount > 0 {
-                        SheetIconButton(systemImage: "trash", label: "清理离线设备") {
-                            editing = nil
-                            pendingRemove = model.devices.filter { !$0.online }
-                        }
-                    }
-                    SheetCloseButton { dismiss() }
-                }
-            }
-
-            ScrollView {
-                VStack(spacing: 0) {
+        NavigationStack {
+            Form {
+                Section {
                     if model.devices.isEmpty {
                         emptyState
                     } else {
                         // 用 IP 做标识：每轮采集都会重建 DeviceInfo，id 每次都不一样，
                         // 换成 IP 行才不会每 2 秒被整体重建一次。
-                        SheetListCard {
-                            ForEach(Array(model.devices.enumerated()), id: \.element.ip) { index, device in
-                                if index > 0 {
-                                    SheetRowDivider(leading: 14)
-                                }
-                                row(device)
-                            }
+                        ForEach(model.devices, id: \.ip) { device in
+                            row(device)
                         }
                     }
+                } header: {
+                    Text(headerCaption)
+                } footer: {
+                    Text("点右侧铅笔可改名；离线设备会变灰，也可以点垃圾桶从列表里移除。")
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 24)
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .navigationTitle("连接设备")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("完成") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // 只有存在离线设备时才出现垃圾桶，全在线的时候这里不该有能点的东西。
+                    if model.offlineDeviceCount > 0 {
+                        Button {
+                            editing = nil
+                            pendingRemove = model.devices.filter { !$0.online }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel("清理离线设备")
+                    }
+                }
+            }
         }
-        .background(SheetSurface())
-        .presentationDetents([.medium, .large], selection: $detent)
-        .presentationDragIndicator(.visible)
         .overlay { modalLayer }
     }
 
@@ -84,23 +79,37 @@ struct DeviceListView: View {
         let online = model.devices.count - offline
         // 以前这里写的是「N 台在线」，数字其实是租约条数。租约 12 小时才过期，
         // 关掉的设备也算在里面，于是这句标题天天在骗人。现在分开说。
-        if offline == 0 { return "\(online) 台在线 · 点铅笔可改名" }
-        return "\(online) 台在线 · \(offline) 台离线 · 点铅笔可改名"
+        // 「点铅笔可改名」挪到分区脚注去了：这里只报数，一行读完不绕。
+        if offline == 0 { return "\(online) 台在线" }
+        return "\(online) 台在线 · \(offline) 台离线"
     }
 
+    /// 空状态：白卡里居中的图标 + 两行字。
+    /// 以前用 `SheetEmptyState`，它自带一张白卡，套进 Form 的行里会双层嵌套。
     @ViewBuilder
     private var emptyState: some View {
-        if model.hiddenDeviceCount > 0 {
-            // 全被清掉的时候不能再说「暂无设备」，否则用户会以为清理把设备弄丢了。
-            SheetEmptyState(icon: "eye.slash",
-                            title: "离线设备已清理",
-                            message: "去「设置 → 设备列表」可以一键恢复",
-                            verticalPadding: 34)
-        } else {
-            SheetEmptyState(icon: "wifi.slash",
-                            title: "暂无 DHCP 租约设备",
-                            verticalPadding: 34)
+        VStack(spacing: 8) {
+            if model.hiddenDeviceCount > 0 {
+                // 全被清掉的时候不能再说「暂无设备」，否则用户会以为清理把设备弄丢了。
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.tertiary)
+                Text("离线设备已清理")
+                    .font(.subheadline.weight(.medium))
+                Text("去「设置 → 设备列表」可以一键恢复")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.tertiary)
+                Text("暂无 DHCP 租约设备")
+                    .font(.subheadline.weight(.medium))
+            }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
     }
 
     /// 卡片里的一行：状态点 + 名字 + IP · MAC / 铅笔（离线行多一个垃圾桶）。
@@ -157,7 +166,7 @@ struct DeviceListView: View {
                         .background(Color(.tertiarySystemFill), in: Circle())
                         .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .accessibilityLabel("删除 \(name)")
             }
 
@@ -173,10 +182,9 @@ struct DeviceListView: View {
                     .background(Color(.tertiarySystemFill), in: Circle())
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .accessibilityLabel("重命名 \(name)")
         }
-        .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
     }
 
@@ -279,7 +287,6 @@ struct DeviceListView: View {
         draftName = model.hasAlias(device) ? name : device.name
         pendingRemove = []
         editing = device
-        detent = .large
         // 立刻聚焦有时会被面板动画吃掉，等一拍再点，键盘才跟得上。
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)

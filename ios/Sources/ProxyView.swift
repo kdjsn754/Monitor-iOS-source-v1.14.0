@@ -647,9 +647,14 @@ struct ProxyView: View {
 
 /// 配置文件选择器。
 ///
-/// 之前点「选择」弹的是系统的 `Menu`：系统灰底浮层、系统字号、跟这套圆角卡片完全两个风格，
-/// 列表一长还会被折成一列系统菜单项。这里改成自绘的半屏面板——
-/// 每行一枚单选点、使用中的那条带绿色标签，底部一枚主按钮确认后才重启内核。
+/// v1.28.29 换成和「新建连接」同一套系统表单弹窗：`NavigationStack` + `Form`，
+/// 「取消」在导航栏左上、标题居中，列表是原生分组卡与缩进分隔线。
+/// （用户：「这三个弹出窗口都改成（新建连接）这种的弹窗」）
+///
+/// 选择方式也从「点整行」改成「行尾开关」：一行只有一枚亮着。
+/// **开关只表示选中，不直接下发**——换配置会重启 OpenClash 内核，
+/// 正在走的连接会断一下，所以仍然要点底部那枚整宽按钮才生效
+/// （用户：「这两个增加切换按钮」，但没要求去掉确认步骤）。
 private struct ConfigPickerSheet: View {
     let configs: [String]
     let applied: String
@@ -667,121 +672,87 @@ private struct ConfigPickerSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader("选择配置文件",
-                        caption: "共 \(configs.count) 个，当前用 \(appliedName)") {
-                SheetCloseButton { dismiss() }
-            }
-            ScrollView {
-                SheetListCard {
-                    ForEach(Array(configs.enumerated()), id: \.element) { index, name in
-                        if index > 0 {
-                            SheetRowDivider(leading: 14)
-                        }
+        NavigationStack {
+            Form {
+                Section {
+                    ForEach(configs, id: \.self) { name in
                         row(name)
                     }
+                } header: {
+                    Text("共 \(configs.count) 个 · 当前用 \(appliedName)")
+                } footer: {
+                    Text("打开开关只是选中，点下方按钮才会真正切换。切换后 OpenClash 会重启内核，正在走的连接会断一下。")
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 14)
+
+                // 整宽胶囊放在表单里，形状和「连接并保存」那颗一致；
+                // 没得可应用时是灰底灰字（`GlassProminentButtonStyle(dimmed:)`），
+                // 不再是以前那枚点了没反应的淡蓝死按钮。
+                Section {
+                    Button {
+                        apply()
+                    } label: {
+                        Text(actionTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(GlassProminentButtonStyle(dimmed: !canApply))
+                    .disabled(!canApply)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                }
             }
-            .frame(maxHeight: 420)
-            .scrollBounceBehavior(.basedOnSize)
-            footer
+            .navigationTitle("选择配置文件")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+            }
         }
-        .background(SheetSurface())
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     private func row(_ name: String) -> some View {
-        let selected = name == picked
         let isApplied = name == applied
-        return Button {
-            picked = name
-        } label: {
-            HStack(spacing: 11) {
-                ZStack {
-                    Circle()
-                        .strokeBorder(selected ? Color.blue : Color(.systemGray3),
-                                      lineWidth: selected ? 6 : 1.5)
-                        .frame(width: 18, height: 18)
-                }
+        return HStack(spacing: 10) {
+            Text(name)
+                .font(.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
 
-                // 「使用中」以前另起一行，于是这一行比别的行高出一截、圆角块也跟着
-                // 变得一大一小。现在并到名字右边，所有行都是单行等高的。
-                Text(name)
-                    .font(.subheadline.weight(selected ? .semibold : .regular))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                if isApplied {
-                    Text("使用中")
-                        .font(.system(size: 9, weight: .medium))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.14), in: Capsule())
-                        .foregroundStyle(.green)
-                }
-
-                Spacer(minLength: 4)
+            // 「使用中」并到名字右边，所有行都是单行等高。
+            if isApplied {
+                Text("使用中")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.green.opacity(0.14), in: Capsule())
+                    .foregroundStyle(.green)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            // minHeight 兜底：名字长短、有没有标签，都不影响行高
-            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            // 选中只靠左侧那枚圆点：实心蓝 = 选中，灰细圈 = 未选中。
-            // 以前还叠过一层淡蓝底、行尾再加一枚蓝勾，一行三处强调，
-            // 在白卡里看着像高亮错误行；两处都删掉了，单选点本身就是最标准的表达。
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 4)
+
+            // 单选：打开任意一行就把别的关掉，关掉自己则忽略（总得有一份被选中）。
+            Toggle("", isOn: Binding {
+                picked == name
+            } set: { on in
+                if on { picked = name }
+            })
+            .labelsHidden()
+            .accessibilityLabel("选择 \(name)")
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 6)
     }
 
-    private var footer: some View {
-        VStack(spacing: 8) {
-            // 没得可应用时不要再摆一枚「已在使用」的淡蓝死按钮：
-            // 那是一个点了没反应的按钮长得像主按钮，整块发灰发脏。
-            // 改成一行静态小字，高度和按钮一致，切换时不会跳。
-            if canApply {
-                Button {
-                    guard !picked.isEmpty else {
-                        dismiss()
-                        return
-                    }
-                    onApply(picked)
-                    dismiss()
-                } label: {
-                    Text(actionTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(Color.blue, in: Capsule())
-                        .foregroundStyle(Color.white)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            } else {
-                Text("已在使用 \(appliedName)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-            }
-
-            Text("切换后 OpenClash 会重启内核，正在走的连接会断一下。")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    private func apply() {
+        guard !picked.isEmpty else {
+            dismiss()
+            return
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 20)
+        onApply(picked)
+        dismiss()
     }
 
     private var appliedName: String {
@@ -793,6 +764,6 @@ private struct ConfigPickerSheet: View {
     }
 
     private var actionTitle: String {
-        canApply ? "应用「\(picked)」" : "已在使用"
+        canApply ? "应用「\(picked)」" : "已在使用 \(appliedName)"
     }
 }

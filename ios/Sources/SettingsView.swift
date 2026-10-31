@@ -558,109 +558,72 @@ struct SectionCard<Content: View>: View {
 
 // MARK: - 切换连接
 
-/// 已保存的连接列表：点一行就切换，右侧垃圾桶删掉。
+/// 已保存的连接列表。
 ///
-/// 原来是「每行一块圆角卡 + 蓝边」竖着排，一屏三行像贴了三张便利贴，
-/// 而面板固定半屏高，只有一条记录时下半屏全是空白——所以看着又碎又空。
-/// 现在改成系统设置那种分组列表（行合进一张卡、行间缩进细线），
-/// 高度按条数算（`presentationDetents` 用 `.height`），有几条就多高。
+/// v1.28.29 换成和「新建连接」同一套系统表单弹窗：`NavigationStack` + `Form`，
+/// 导航栏「关闭」在左、标题居中，列表是原生分组卡 + 缩进分隔线，没有拖动条。
+/// （用户：「这三个弹出窗口都改成（新建连接）这种的弹窗」）
+///
+/// 切换动作从「点整行」改成「行尾开关」——一行只有一枚开关亮着，
+/// 打开哪一行就切到哪台（用户：「这两个增加切换按钮」）。
+/// **当前那台的开关关不掉**：关掉没有语义，`set` 里直接返回，
+/// 取值来源是 `profile.id == currentProfileID`，界面会立刻弹回原样。
 private struct RouterSwitcherSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+
+    /// 待删除的连接。非 nil 就浮确认卡（自绘，不用系统 confirmationDialog——
+    /// 在 sheet 里弹系统对话框，iOS 26 会把它锚到页面半空）。
     @State private var pendingDelete: RouterProfile?
-    @State private var confirmDelete = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader("切换连接", caption: caption) {
-                SheetCloseButton { dismiss() }
-            }
-
-            ScrollView {
-                VStack(spacing: 16) {
+        NavigationStack {
+            Form {
+                Section {
                     if model.profiles.isEmpty {
-                        emptyCard
+                        emptyState
                     } else {
-                        SheetListCard {
-                            ForEach(Array(model.profiles.enumerated()), id: \.element.id) { index, profile in
-                                if index > 0 {
-                                    SheetRowDivider(leading: 58)
-                                }
-                                row(profile)
-                            }
+                        ForEach(model.profiles) { profile in
+                            row(profile)
                         }
                     }
-
-                    Text("点一行立即切换；删除会一并清掉钥匙串里的密码。")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
+                } header: {
+                    Text(caption)
+                } footer: {
+                    Text("打开开关即切换，面板会收起并开始连接；删除会一并清掉钥匙串里存的密码。")
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 24)
             }
-            .scrollBounceBehavior(.basedOnSize)
-        }
-        .background(SheetSurface())
-        .presentationDetents([.height(sheetHeight), .large])
-        .presentationDragIndicator(.visible)
-        // 确认框自绘：sheet 里用系统的 confirmationDialog，iOS 26 会把它锚到
-        // 页面半空（看着像贴歪的气泡），和「连接设备」面板统一走这套浮层。
-        .overlay {
-            if confirmDelete, let profile = pendingDelete {
-                SheetOverlay(onDismiss: { closeDelete() }) {
-                    SheetOverlayCard {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("删除「\(profile.title)」？")
-                                .font(.headline)
-                                .lineLimit(2)
-                            Text(profile.id == model.currentProfileID
-                                 ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
-                                 : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 10) {
-                            SheetOverlayButton(title: "取消") { closeDelete() }
-                            SheetOverlayButton(title: "删除连接", tint: .red) {
-                                model.deleteProfile(profile)
-                                closeDelete()
-                            }
-                        }
-                    }
+            .navigationTitle("切换连接")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("关闭") { dismiss() }
                 }
             }
         }
-    }
-
-    private func closeDelete() {
-        pendingDelete = nil
-        confirmDelete = false
+        .overlay { deleteConfirm }
     }
 
     private var caption: String {
-        model.profiles.isEmpty
-            ? "还没有保存过连接"
-            : "共 \(model.profiles.count) 个，点一下即切换"
+        model.profiles.isEmpty ? "还没有保存过连接" : "共 \(model.profiles.count) 个"
     }
 
-    /// 面板高度跟着条数走：表头 70 + 每行 64 + 说明 36 + 上下留白 38。
-    /// 只有一条记录时不再撑出半屏空白；八条以上就顶到 560 由 ScrollView 接管。
-    /// 空状态那张卡比一行高得多（有图标和两行说明），单独给 300。
-    private var sheetHeight: CGFloat {
-        guard !model.profiles.isEmpty else { return 300 }
-        let rows = CGFloat(model.profiles.count)
-        return min(max(70 + rows * 64 + 36 + 38, 216), 560)
-    }
-
-    private var emptyCard: some View {
-        SheetEmptyState(icon: "router",
-                        title: "还没有保存过连接",
-                        message: "回到设置页点「新建连接」，填好路由器地址和密码即可")
+    /// 空状态：白卡里居中的图标 + 两行字，不用单独的组件——
+    /// 以前那套 `SheetEmptyState` 自带一张白卡，套进 Form 的行里会双层嵌套。
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "router")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text("还没有保存过连接")
+                .font(.subheadline.weight(.medium))
+            Text("回到设置页点「新建连接」，填好路由器地址和密码即可")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
     }
 
     private func row(_ profile: RouterProfile) -> some View {
@@ -668,84 +631,105 @@ private struct RouterSwitcherSheet: View {
         let isConnecting = model.connecting
             && model.attemptTarget?.profile.id == profile.id
 
-        return HStack(spacing: 0) {
-            Button {
-                guard !isCurrent, !isConnecting else { return }
-                // 先收起面板，让连接弹窗能盖在最上面。
-                dismiss()
-                Task { await model.switchTo(profile) }
-            } label: {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(isCurrent ? Color.blue.opacity(0.16) : Color(.tertiarySystemFill))
-                            .frame(width: 34, height: 34)
-                        // 原来靠「实心 / 空心」区分当前连接，线稿没有实心版，
-                        // 改用颜色：当前那台给主色，其余降到次要灰。
-                        RouterGlyph(size: 22,
-                                    tint: isCurrent ? Color.blue : Color.secondary)
-                    }
+        return HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isCurrent ? Color.blue.opacity(0.16) : Color(.tertiarySystemFill))
+                    .frame(width: 34, height: 34)
+                // 线稿图标没有实心版，靠颜色区分：当前那台给主色，其余降到次要灰。
+                RouterGlyph(size: 22, tint: isCurrent ? Color.blue : Color.secondary)
+            }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(profile.title)
-                                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            if isCurrent {
-                                Text("当前")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.green.opacity(0.14), in: Capsule())
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        Text(profile.subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 6)
-
-                    if isConnecting {
-                        ProgressView().controlSize(.mini)
-                    } else if isCurrent {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 17))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(profile.title)
+                        .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                        .lineLimit(1)
+                    if isCurrent {
+                        Text("当前")
+                            .font(.system(size: 10, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.14), in: Capsule())
                             .foregroundStyle(.green)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .frame(minHeight: 64)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                Text(profile.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .buttonStyle(.plain)
-            // 这里**不能**用 `.disabled(isCurrent)`：禁用会把整行 label 压淡，
-            // 当前那一行因此像蒙了一层灰（用户就是这么反馈的）。
-            // 当前行和「正在连」本来就被上面的 guard 挡住了，不需要禁用态。
+
+            Spacer(minLength: 4)
+
+            if isConnecting {
+                ProgressView().controlSize(.mini)
+            }
 
             Button {
                 pendingDelete = profile
-                confirmDelete = true
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.red.opacity(0.85))
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 12)
+            // Form 的行里必须 borderless：不指定样式的话，点这一枚会把整行当按钮。
+            .buttonStyle(.borderless)
             .accessibilityLabel("删除 \(profile.title)")
+
+            Toggle("", isOn: switchBinding(for: profile))
+                .labelsHidden()
+                .accessibilityLabel("切换到 \(profile.title)")
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// 开关的取值只有一个来源：是不是当前连接。
+    ///
+    /// 不另存一份状态——切换成功后 `currentProfileID` 一变，这一列开关自己就跟着挪。
+    /// 关掉（`on == false`）一律忽略：当前那台关掉没有语义，
+    /// 别的本来也没亮，弹回去就是最直白的反馈。
+    private func switchBinding(for profile: RouterProfile) -> Binding<Bool> {
+        Binding {
+            profile.id == model.currentProfileID
+        } set: { on in
+            guard on, profile.id != model.currentProfileID, !model.connecting else { return }
+            // 先收起面板，让连接弹窗能盖在最上面。
+            dismiss()
+            Task { await model.switchTo(profile) }
+        }
+    }
+
+    /// 删除确认：一层遮罩 + 一张卡片，点遮罩取消。
+    @ViewBuilder
+    private var deleteConfirm: some View {
+        if let profile = pendingDelete {
+            SheetOverlay(onDismiss: { pendingDelete = nil }) {
+                SheetOverlayCard {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("删除「\(profile.title)」？")
+                            .font(.headline)
+                            .lineLimit(2)
+                        Text(profile.id == model.currentProfileID
+                             ? "这是当前正在使用的连接，删除后会立即断开，需要重新填写密码。"
+                             : "密码会一起从钥匙串里删除，重新添加时要再输一次。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    HStack(spacing: 10) {
+                        SheetOverlayButton(title: "取消") { pendingDelete = nil }
+                        SheetOverlayButton(title: "删除连接", tint: .red) {
+                            model.deleteProfile(profile)
+                            pendingDelete = nil
+                        }
+                    }
+                }
+            }
         }
     }
 }
